@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TextAdventure</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <h1>TextAdventure</h1>
+        <div class="sub">Procedural, DnD-inspired one-sitting adventure</div>
+      </header>
+
+      <section class="panel" aria-label="Game output">
+        <pre id="log" class="log" aria-live="polite"></pre>
+      </section>
+
+      <section class="controls" aria-label="Command input">
+        <form id="cmdForm" class="cmd-form" autocomplete="off">
+          <input id="cmdInput" class="cmd-input" type="text" placeholder="Type a command (help, look, go north, take, attack, use potion, leave)" />
+          <button id="cmdSubmit" class="cmd-submit" type="submit">Send</button>
+          <button id="newGame" class="cmd-secondary" type="button">New Game</button>
+        </form>
+        <div class="hint">
+          Try: <code>help</code>, <code>look</code>, <code>go east</code>, <code>attack</code>, <code>use potion</code>, <code>leave</code>
+        </div>
+      </section>
+
+      <footer class="footer">
+        No save files. Refreshing or starting a new game generates a new dungeon.
+      </footer>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

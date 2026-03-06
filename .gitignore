@@ -1,0 +1,68 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+backend/.venv/
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment variables / secrets
+.env
+.env.*
+!.env.example
+
+# ---- FastAPI / Uvicorn ----
+*.log
+uvicorn.log
+
+# ---- Frontend ----
+# (No build step in this repo, but keep common artifacts out)
+node_modules/
+.npm/
+.pnpm-store/
+yarn-error.log
+npm-debug.log*
+pnpm-debug.log*
+
+# ---- VS Code / IDEs ----
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+.idea/
+*.iml
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ---- Misc ----
+*.tmp
+*.swp
+*.swo
+*~
