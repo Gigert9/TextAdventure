@@ -3,18 +3,77 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>TextAdventure</title>
+    <title>Text Adventure</title>
+    <link rel="icon" href="/assets/Logo_Square-ICO_TransparentBG.ico" sizes="any" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <main class="app">
       <header class="header">
-        <h1>TextAdventure</h1>
+        <div class="title-row">
+          <img class="title-logo" src="/assets/Logo_Square_TransparentBG.png" alt="Text Adventure logo" />
+          <h1>Text Adventure</h1>
+        </div>
         <div class="sub">Procedural, DnD-inspired one-sitting adventure</div>
       </header>
 
-      <section class="panel" aria-label="Game output">
-        <pre id="log" class="log" aria-live="polite"></pre>
+      <section class="main-row" aria-label="Game view">
+        <section class="panel" aria-label="Character sheet">
+          <div class="panel-head">
+            <div class="panel-title">Character</div>
+          </div>
+          <pre id="sheet" class="sheet" aria-label="Character sheet"></pre>
+        </section>
+
+        <section class="panel" aria-label="Game output">
+          <div class="panel-head">
+            <div class="panel-title">Adventure</div>
+          </div>
+          <pre id="log" class="log" aria-live="polite"></pre>
+        </section>
+
+        <section class="map-col" aria-label="Maps">
+          <section class="panel" aria-label="Dungeon map">
+            <div class="panel-head compact">
+              <div class="panel-title">Dungeon Map</div>
+            </div>
+            <div class="map-body" aria-label="Dungeon map body">
+              <pre id="dungeonMap" class="map map-art" aria-label="Dungeon map"></pre>
+              <pre id="dungeonLegend" class="map-legend" aria-label="Dungeon map legend">P = you
+M = enemy
+E = exit
+B = boss
+* = loot
+? = puzzle</pre>
+            </div>
+          </section>
+
+          <section class="panel" aria-label="Room map">
+            <div class="panel-head compact">
+              <div class="panel-title">Room</div>
+            </div>
+            <div class="map-body" aria-label="Room map body">
+              <pre id="roomMap" class="map map-art" aria-label="Room map"></pre>
+              <pre id="roomLegend" class="map-legend" aria-label="Room map legend">@ = you
+m = enemy
+* = items
+? = puzzle
+D = door
+
+F = fungi
+A = altar
+R = rack
+S = sarcophagus
+H = shelves
+W = workbench
+P = pews
+T = firepit
+C = camp
+
++ - | = walls</pre>
+            </div>
+          </section>
+        </section>
       </section>
 
       <section class="controls" aria-label="Command input">
@@ -24,7 +83,7 @@
           <button id="newGame" class="cmd-secondary" type="button">New Game</button>
         </form>
         <div class="hint">
-          Try: <code>help</code>, <code>look</code>, <code>go east</code>, <code>attack</code>, <code>use potion</code>, <code>leave</code>
+          Try: <code>help</code>, <code>look</code>, <code>look door</code>, <code>go east</code>, <code>equip shortsword</code>, <code>attack</code>, <code>cast healing word</code>
         </div>
       </section>
 

@@ -5,6 +5,12 @@
   --muted: #9ca3af;
   --border: #1f2937;
   --focus: #93c5fd;
+
+  --gap: clamp(8px, 1.1vh, 12px);
+  --pad-app-y: clamp(10px, 1.6vh, 16px);
+  --pad-app-x: clamp(10px, 1.2vw, 14px);
+  --pad-panel: clamp(8px, 1.2vh, 12px);
+  --radius: clamp(9px, 1.1vh, 10px);
 }
 
 * { box-sizing: border-box; }
@@ -14,43 +20,182 @@ body {
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
   background: linear-gradient(180deg, var(--bg), #020617);
   color: var(--text);
+  font-size: clamp(12.5px, 1.35vh, 14px);
 }
 
 .app {
-  max-width: 920px;
+  max-width: 1180px;
   margin: 0 auto;
-  padding: 24px 16px 32px;
+  padding: var(--pad-app-y) var(--pad-app-x) var(--pad-app-y);
   display: grid;
-  gap: 14px;
+  gap: var(--gap);
+  min-height: 100vh;
 }
 
 .header h1 {
   margin: 0;
-  font-size: 22px;
+  font-size: clamp(18px, 2.1vh, 20px);
   letter-spacing: 0.5px;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.title-logo {
+  height: clamp(18px, 2.1vh, 20px);
+  width: auto;
+  display: block;
 }
 
 .sub {
   color: var(--muted);
   margin-top: 6px;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .panel {
   background: rgba(17, 24, 39, 0.86);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.panel-head {
+  padding: calc(var(--pad-panel) * 0.75) var(--pad-panel);
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 2px;
+}
+
+.panel-head.compact {
+  padding: calc(var(--pad-panel) * 0.55) calc(var(--pad-panel) * 0.75);
+  gap: 0;
+}
+
+.panel-title {
+  font-size: 13px;
+  letter-spacing: 0.4px;
+}
+
+.panel-sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.main-row {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr) 440px;
+  gap: 14px;
+  align-items: stretch;
+  height: 66vh;
+  overflow: hidden;
+  min-height: 0;
+}
+
+@media (max-width: 860px) {
+  .main-row {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+}
+
+.map-col {
+  display: grid;
+  gap: var(--gap);
+  align-content: stretch;
+  grid-template-rows: 1fr 1fr;
+  min-height: 0;
 }
 
 .log {
   margin: 0;
-  padding: 14px;
-  min-height: 52vh;
-  max-height: 62vh;
+  padding: var(--pad-panel);
+  flex: 1;
   overflow: auto;
+  min-height: 0;
   white-space: pre-wrap;
   line-height: 1.35;
+}
+
+.sheet {
+  margin: 0;
+  padding: var(--pad-panel);
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  white-space: pre-wrap;
+  line-height: 1.3;
+}
+
+.map {
+  margin: 0;
+  padding: calc(var(--pad-panel) * 0.75);
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+  white-space: pre;
+  line-height: 1.05;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+.map-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 170px;
+  gap: 10px;
+  align-items: start;
+  padding: calc(var(--pad-panel) * 0.75);
+  flex: 1;
+  min-height: 0;
+}
+
+/* Room map needs a hair more width than the legend. */
+section[aria-label="Room map"] .map-body {
+  grid-template-columns: minmax(0, 1fr) 132px;
+}
+
+/* Two-column Room legend so it doesn't get clipped vertically. */
+section[aria-label="Room map"] .map-legend {
+  column-count: 2 !important;
+  column-width: 6.2em;
+  column-gap: 12px;
+  column-fill: auto;
+  /* Prevent text from spilling into adjacent columns. */
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.15;
+}
+
+.map-art {
+  padding-right: 0;
+}
+
+.map-legend {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  min-height: 0;
+  white-space: pre;
+  line-height: 1.2;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+
+
+@media (max-width: 860px) {
+  .main-row {
+    height: auto;
+  }
 }
 
 .controls {
@@ -66,7 +211,7 @@ body {
 
 .cmd-input {
   width: 100%;
-  padding: 10px 12px;
+  padding: 9px 10px;
   border-radius: 10px;
   border: 1px solid var(--border);
   background: rgba(2, 6, 23, 0.7);
@@ -79,7 +224,7 @@ body {
 }
 
 button {
-  padding: 10px 12px;
+  padding: 9px 10px;
   border-radius: 10px;
   border: 1px solid var(--border);
   background: rgba(31, 41, 55, 0.75);
@@ -93,7 +238,7 @@ button:hover { background: rgba(55, 65, 81, 0.85); }
 
 .hint {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .hint code {
@@ -108,4 +253,37 @@ button:hover { background: rgba(55, 65, 81, 0.85); }
   color: var(--muted);
   font-size: 12px;
   margin-top: 8px;
+}
+
+@media (max-height: 800px) {
+  .app {
+    padding: 12px 10px 12px;
+    gap: 8px;
+  }
+
+  .main-row {
+    grid-template-columns: 300px minmax(0, 1fr) 420px;
+    gap: 8px;
+  }
+
+  .map-col {
+    gap: 8px;
+  }
+
+  .panel-head {
+    padding: 7px 10px;
+  }
+
+  .log {
+    padding: 10px;
+  }
+
+  .sheet {
+    padding: 9px;
+  }
+
+  .map {
+    font-size: 11px;
+    line-height: 1.05;
+  }
 }

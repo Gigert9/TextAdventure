@@ -13,6 +13,7 @@ from .store import GameStore
 ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = ROOT / "frontend"
 STATIC_DIR = FRONTEND_DIR / "static"
+ASSETS_DIR = FRONTEND_DIR / "assets"
 
 app = FastAPI(title="TextAdventure")
 store = GameStore()
@@ -55,3 +56,4 @@ def api_command(req: CommandRequest) -> dict:
 
 # Static assets
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
