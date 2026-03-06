@@ -246,6 +246,10 @@ class GameEngine:
     KEYS = content_items.KEYS
     POTIONS = content_items.POTIONS
 
+    # Early-game tuning knobs (keep later chapters intact).
+    EARLY_GAME_CHAPTER: int = 1
+    EARLY_GAME_STARTING_GOLD: int = 15
+
     SPECIES = ["Human", "Halfling", "Elf", "Tiefling"]
     CLASSES = ["Barbarian", "Bard", "Rogue", "Warlock"]
 
@@ -1111,7 +1115,8 @@ class GameEngine:
             inventory.append("healing potion")
             inventory.append("rope")
         else:
-            inventory.append(_pick(rng, self.POTIONS))
+            # Always provide basic healing at level 1.
+            inventory.append("healing potion")
             inventory.append(_pick(rng, ["rope", "chalk", "ration"]))
 
         if char_class == "Barbarian":
@@ -1160,23 +1165,25 @@ class GameEngine:
         inventory, eq_melee, eq_ranged, spells, max_slots = self._starting_loadout(
             rng, char_class=char_class, deterministic=deterministic
         )
-        p = Player(name=name,
-                      species=species,
-                      char_class=char_class,
-                      level=1,
-                      ability_scores={k: int(scores.get(k, 10)) for k in ABILITY_KEYS},
-                      hp=max_hp,
-                      max_hp=max_hp,
-                      ac=ac,
-                      proficiency_bonus=prof,
-                      inventory=inventory,
-                      equipped_melee=eq_melee,
-                      equipped_ranged=eq_ranged,
-                      known_spells=spells,
-                      spell_slots=max_slots,
-                      max_spell_slots=max_slots,
-                      xp=0,
-                      )
+        p = Player(
+            name=name,
+            species=species,
+            char_class=char_class,
+            level=1,
+            ability_scores={k: int(scores.get(k, 10)) for k in ABILITY_KEYS},
+            hp=max_hp,
+            max_hp=max_hp,
+            ac=ac,
+            proficiency_bonus=prof,
+            inventory=inventory,
+            equipped_melee=eq_melee,
+            equipped_ranged=eq_ranged,
+            known_spells=spells,
+            spell_slots=max_slots,
+            max_spell_slots=max_slots,
+            xp=0,
+            gold=int(self.EARLY_GAME_STARTING_GOLD),
+        )
 
         self._apply_class_progression(p)
         if p.char_class == "Barbarian":
@@ -1390,7 +1397,28 @@ class GameEngine:
         elif (not boss) and tier >= 4 and dmg_s <= 6:
             dmg_s = 8
 
+        # Chapter 1 should be approachable: slightly reduce hit/damage on non-bosses.
+        if (not boss) and int(chapter) == int(self.EARLY_GAME_CHAPTER):
+            atk = max(1, int(atk) - 1)
+            # Downshift damage die one step (d8->d6, d6->d4, d4 stays).
+            if int(dmg_s) >= 8:
+                dmg_s = int(dmg_s) - 2
+            elif int(dmg_s) == 6:
+                dmg_s = 4
+
         return Monster(name=name, hp=hp, ac=ac, attack_bonus=atk, damage_die=(int(dmg_n), int(dmg_s)), flavor=flavor)
+
+    def _chapter_potion_pool(self, *, chapter: int) -> List[str]:
+        ch = _clamp(int(chapter), 1, MAX_CHAPTERS)
+        # Heavily weight basic healing early; later chapters broaden the mix.
+        if ch <= 1:
+            return ["healing potion"] * 7 + ["potion of heroism"] * 2 + ["potion of invisibility"]
+        if ch <= 4:
+            return ["healing potion"] * 5 + ["potion of heroism"] * 2 + ["greater healing potion"] + ["potion of invisibility"]
+        return list(self.POTIONS)
+
+    def _random_potion(self, rng: random.Random, *, chapter: int) -> str:
+        return _pick(rng, self._chapter_potion_pool(chapter=chapter))
 
     def _place_puzzles_and_loot(self, rng: random.Random, rooms: Dict[str, Room], start_id: str, boss_id: str, *, chapter: int) -> None:
         room_ids = [rid for rid in rooms.keys() if rid not in (start_id, boss_id)]
@@ -1455,7 +1483,7 @@ class GameEngine:
             "answer": answer,
             "prompt": prompt,
             "solved": "no",
-            "reward": _pick(rng, ["smoke bomb", "holy water", "antitoxin", _pick(rng, self.POTIONS)]),
+            "reward": _pick(rng, ["smoke bomb", "holy water", "antitoxin", self._random_potion(rng, chapter=chapter)]),
         }
         rooms[riddle_room_id].desc += " A talking skull rests on a pedestal, waiting."
 
@@ -1484,7 +1512,7 @@ class GameEngine:
                 "answer": answer2,
                 "prompt": prompt2,
                 "solved": "no",
-                "reward": _pick(rng, ["smoke bomb", "holy water", "antitoxin", _pick(rng, self.POTIONS)]),
+                "reward": _pick(rng, ["smoke bomb", "holy water", "antitoxin", self._random_potion(rng, chapter=chapter)]),
             }
             rooms[riddle2_id].desc += " A second skull has been set here, as if to mock the first."
 
@@ -1504,7 +1532,7 @@ class GameEngine:
                     "answer": ans,
                     "prompt": prompt,
                     "solved": "no",
-                    "reward": _pick(rng, ["holy water", "antitoxin", _pick(rng, self.POTIONS)]),
+                    "reward": _pick(rng, ["holy water", "antitoxin", self._random_potion(rng, chapter=chapter)]),
                 }
                 rooms[rid].desc += " A stone dial set with runes is mounted in the wall."
             else:
@@ -1514,13 +1542,16 @@ class GameEngine:
                     "dc": str(dc),
                     "disarmed": "no",
                     "solved": "no",
-                    "reward": _pick(rng, ["coin pouch", _pick(rng, self.POTIONS), "holy water", "antitoxin"]),
+                    "reward": _pick(rng, ["coin pouch", self._random_potion(rng, chapter=chapter), "holy water", "antitoxin"]),
                 }
                 rooms[rid].desc += " A heavy chest sits here, its lock surrounded by suspicious scratches."
 
         # Sprinkle monsters and extra loot
         ch = _clamp(int(chapter), 1, MAX_CHAPTERS)
-        monster_chance = _clamp(0.40 + (ch * 0.005), 0.40, 0.60)
+        if ch == int(self.EARLY_GAME_CHAPTER):
+            monster_chance = 0.30
+        else:
+            monster_chance = _clamp(0.40 + (ch * 0.005), 0.40, 0.60)
         loot_chance = _clamp(0.30 + (ch * 0.003), 0.30, 0.45)
         for rid, room in rooms.items():
             if rid in (start_id, boss_id):
@@ -1545,7 +1576,7 @@ class GameEngine:
                             "light crossbow",
                             "leather armor",
                             "shield",
-                            _pick(rng, self.POTIONS),
+                            self._random_potion(rng, chapter=chapter),
                         ],
                     )
                 )
@@ -2068,11 +2099,19 @@ class GameEngine:
         "shield": 10,
     }
 
+    def _effective_shop_stock(self, game: Game) -> Dict[str, int]:
+        stock = dict(self.SHOP_STOCK)
+        # Make basic healing more accessible in the first dungeon.
+        if int(game.chapter) == int(self.EARLY_GAME_CHAPTER):
+            stock["healing potion"] = 25
+        return stock
+
     def _cmd_shop(self, game: Game) -> List[str]:
         if not self._shop_available(game):
             return ["There's no merchant here."]
         lines = ["A travelling merchant has set out a small, careful display.", f"Gold: {game.player.gold} gp", "", "For sale:"]
-        for name, price in sorted(self.SHOP_STOCK.items(), key=lambda kv: kv[0]):
+        stock = self._effective_shop_stock(game)
+        for name, price in sorted(stock.items(), key=lambda kv: kv[0]):
             lines.append(f"  - {name} ({price} gp)")
         lines.append("")
         lines.append("Commands: buy <item> | sell <item>")
@@ -2084,10 +2123,11 @@ class GameEngine:
         target = (arg or "").strip().lower()
         if not target:
             return ["Buy what?"]
-        match = next((name for name in self.SHOP_STOCK.keys() if target in name), None)
+        stock = self._effective_shop_stock(game)
+        match = next((name for name in stock.keys() if target in name), None)
         if not match:
             return ["The merchant doesn't have that."]
-        price = int(self.SHOP_STOCK[match])
+        price = int(stock[match])
         if game.player.gold < price:
             return [f"You don't have enough gold. ({game.player.gold}/{price} gp)"]
         game.player.gold -= price
@@ -2106,7 +2146,8 @@ class GameEngine:
         item = game.player.inventory[idx].lower()
         if item == "coin pouch":
             return ["The merchant eyes your coin pouch. 'That's already money.'"]
-        base = int(self.SHOP_STOCK.get(item, 2))
+        stock = self._effective_shop_stock(game)
+        base = int(stock.get(item, 2))
         value = max(1, base // 2)
         game.player.inventory.pop(idx)
         game.player.gold += value
@@ -2613,8 +2654,9 @@ class GameEngine:
             else:
                 lines.append("A talking skull watches you. (Try `look skull` / `use answer <word>`.)")
 
-        # If monster exists, it may ambush
-        if new_room.monster is not None and new_room.monster.hp > 0 and rng.random() < 0.25:
+        # If monster exists, it may ambush. Chapter 1 is less punishing.
+        ambush_chance = 0.10 if int(game.chapter) == int(self.EARLY_GAME_CHAPTER) else 0.25
+        if new_room.monster is not None and new_room.monster.hp > 0 and rng.random() < ambush_chance:
             lines.append(f"{new_room.monster.name} lunges first!")
             lines.extend(self._monster_attack(game, rng, new_room, new_room.monster))
 
