@@ -20,6 +20,9 @@ A small web-based, D&D-inspired text adventure with procedural dungeons and ASCI
 - Puzzles:
 	- Rune-locked doors that require keys
 	- Riddle skulls (answer with a single word)
+	- Lever-locked boss gates (set the lever to the right symbol)
+	- Rune dials (solve with a single word)
+	- Trapped chests (disarm or risk the needle)
 - Merchant camp:
 	- `shop`, `buy <item>`, `sell <item>` when you find a camp room
 - Progression:
@@ -27,6 +30,7 @@ A small web-based, D&D-inspired text adventure with procedural dungeons and ASCI
 	- Class scaling (rage, sneak attack dice, bardic inspiration die, warlock pact slots, cantrip scaling)
 - Chapters:
 	- After you win, you can `continue` to descend again into a new dungeon with a new objective.
+	- Campaign length is 20 chapters; Chapter 20 is the final victory.
 
 ## Objectives (per chapter)
 
@@ -35,6 +39,11 @@ Each chapter rolls one of these objectives:
 - **Recover an artifact**, then escape.
 - **Slay the boss**, then escape.
 - **Collect three rune sigils**, then escape.
+- **Light three ancient braziers**, then escape.
+- **Rescue a prisoner** (free them), then escape.
+- **Cleanse a tainted shrine**, then escape.
+- **Seal a planar rift** (requires reagents), then escape. (Later chapters)
+- **Destroy a lich’s phylactery**, then escape. (Later chapters)
 
 Once the objective is complete, find the exit stairway and `leave`.
 
@@ -71,8 +80,16 @@ Class feature commands:
 
 - Barbarian: `rage`, `reckless`
 - Bard: `inspire`
+- Rogue: `hide`
+- Warlock: `hex`
 
 Tip: most item commands accept partial matches (e.g. `equip leather`).
+
+### Common `use` interactions
+
+- Puzzles: `use lever <sun|moon|star>`, `use dial <word>`, `use chest`, `use lockpick`
+- Objectives: `use brazier`, `use cage`, `use altar`, `use rift`, `use phylactery`
+- Items: `use healing potion` (and other potions), `use holy water`, `use antitoxin`, `use smoke bomb`
 
 ## Map legends
 

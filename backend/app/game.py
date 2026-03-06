@@ -6,6 +6,12 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from .content import bestiary as content_bestiary
+from .content import features as content_features
+from .content import items as content_items
+from .content import lore as content_lore
+from .content import riddles as content_riddles
+
 
 DIRECTIONS: Dict[str, str] = {
     "north": "south",
@@ -15,6 +21,8 @@ DIRECTIONS: Dict[str, str] = {
 }
 
 ABILITY_KEYS: Tuple[str, ...] = ("str", "dex", "con", "int", "wis", "cha")
+
+MAX_CHAPTERS: int = 20
 
 
 def _ability_mod(score: int) -> int:
@@ -60,6 +68,8 @@ class Room:
     items: List[str] = field(default_factory=list)
     puzzle: Optional[str] = None
     puzzle_state: Dict[str, str] = field(default_factory=dict)
+    room_state: Dict[str, str] = field(default_factory=dict)
+    scenery: Dict[str, str] = field(default_factory=dict)
     combat_state: Dict[str, str] = field(default_factory=dict)
     monster: Optional[Monster] = None
     is_exit: bool = False
@@ -100,6 +110,8 @@ class Player:
     bardic_inspiration_die: int = 0  # sides: 6/8/10/12
     inspired_die: int = 0  # sides granted to next attack roll
 
+    rogue_hidden: bool = False
+
     rogue_sneak_dice: int = 0  # number of d6
 
     warlock_pact_slot_level: int = 1
@@ -130,6 +142,9 @@ class Game:
     story: Dict[str, str] = field(default_factory=dict)
     won: bool = False
     lost: bool = False
+    campaign_complete: bool = False
+
+    visited_rooms: set[str] = field(default_factory=set)
 
     log: List[str] = field(default_factory=list)
 
@@ -224,37 +239,12 @@ class GameEngine:
             parts.append(detail)
         return " ".join(parts)
 
-    MONSTERS = [
-        ("Goblin", 7, 13, 4, (1, 6), "A wiry goblin hisses, clutching a jagged blade."),
-        ("Skeleton", 10, 13, 4, (1, 6), "Bones clatter as a skeleton raises a rusted sword."),
-        ("Kobold", 5, 12, 3, (1, 4), "A kobold yips and jabs with a spear."),
-        ("Cultist", 9, 12, 3, (1, 6), "A hooded cultist murmurs a dark prayer."),
-    ]
+    MONSTERS = content_bestiary.MONSTERS
+    BOSSES = content_bestiary.BOSSES
 
-    BOSSES = [
-        ("Hobgoblin Captain", 22, 15, 5, (1, 8), "A disciplined hobgoblin squares up, eyes cold."),
-        ("Wight", 26, 14, 6, (1, 8), "A pallid wight glides forward, hunger in its gaze."),
-        ("Owlbear", 30, 13, 6, (2, 6), "An owlbear bellows, feathers bristling."),
-    ]
-
-    ARTIFACTS = [
-        "Amulet of the Dawn",
-        "Gem of Whispering Shadows",
-        "Codex of Nine Sigils",
-        "Chalice of the Moon",
-    ]
-
-    KEYS = [
-        "iron key",
-        "bone key",
-        "silver key",
-        "rune key",
-    ]
-
-    POTIONS = [
-        "healing potion",
-        "greater healing potion",
-    ]
+    ARTIFACTS = content_items.ARTIFACTS
+    KEYS = content_items.KEYS
+    POTIONS = content_items.POTIONS
 
     SPECIES = ["Human", "Halfling", "Elf", "Tiefling"]
     CLASSES = ["Barbarian", "Bard", "Rogue", "Warlock"]
@@ -515,6 +505,9 @@ class GameEngine:
         "lockpick": "A slim set of picks and tension tools, kept oiled and ready.",
         "healing potion": "A small vial that glows faintly. It smells of sharp herbs.",
         "greater healing potion": "A richer red draught—warm to the touch.",
+        "superior healing potion": "A thick crimson draught that tastes like iron and thunder.",
+        "potion of heroism": "A golden tincture that leaves your chest warm and your hands steady.",
+        "potion of invisibility": "A clear liquid that refuses to catch the light. The vial looks empty until it moves.",
         "greataxe": "A heavy axe with a broad, hungry edge.",
         "rapier": "A slender blade made for precision and timing.",
         "dagger": "A simple knife balanced for quick strikes (and throwing).",
@@ -525,6 +518,8 @@ class GameEngine:
         "holy water": "Blessed water in a stoppered flask. It stings the unclean.",
         "smoke bomb": "A fragile orb that bursts into thick, eye-watering smoke.",
         "antitoxin": "A bitter draught that fights venom in the blood.",
+        "silver dust": "A pinch of glittering dust in a wax-paper twist. It clings to your fingertips.",
+        "warding chalk": "Chalk mixed with salt and ash—meant for circles, sigils, and wards.",
         "coin pouch": "A small pouch with a few clinking coins.",
         "iron key": "A plain iron key, its teeth worn smooth by use. It feels heavier than it should.",
         "bone key": "A key carved from bone—polished, old, and unsettlingly warm.",
@@ -648,10 +643,27 @@ class GameEngine:
 
         return "Ability Score Improvement applied."
 
+    def _level_up_once(self, p: Player, rng: random.Random) -> Tuple[int, Optional[str]]:
+        con_mod = _ability_mod(p.ability_scores.get("con", 10))
+        hit_die = self.CLASS_HIT_DIE.get(p.char_class, 8)
+
+        p.level += 1
+        hp_gain = max(1, rng.randint(1, hit_die) + con_mod)
+        p.max_hp += hp_gain
+        p.hp += hp_gain
+
+        asi_note = self._apply_asi(p)
+        self._apply_class_progression(p)
+        p.ac = self._recompute_player_ac(p)
+        return hp_gain, asi_note
+
     def _award_xp_and_apply_levelups(self, game: Game, rng: random.Random, *, boss: bool) -> List[str]:
         p = game.player
         if p.level >= 20:
             return []
+
+        # Chapter pacing: you can't out-level the current chapter.
+        level_cap = _clamp(int(game.chapter), 1, 20)
 
         cur_floor = self._xp_for_level(p.level)
         next_floor = self._xp_for_level(min(20, p.level + 1))
@@ -660,82 +672,35 @@ class GameEngine:
         gain = int(span * (0.35 if boss else 0.14))
         gain = max(25 if boss else 10, gain)
         p.xp += gain
+
+        # Prevent banking enough XP to skip multiple levels when the chapter cap increases.
+        if level_cap < 20:
+            p.xp = min(p.xp, self._xp_for_level(level_cap + 1) - 1)
         lines = [f"You gain {gain} XP."]
 
         old_level = p.level
-        new_level = self._level_for_xp(p.xp)
+        new_level = min(self._level_for_xp(p.xp), level_cap)
         if new_level <= old_level:
             return lines
 
         gained_hp_total = 0
-        con_mod = _ability_mod(p.ability_scores.get("con", 10))
-        hit_die = self.CLASS_HIT_DIE.get(p.char_class, 8)
         for _ in range(new_level - old_level):
-            p.level += 1
-            hp_gain = max(1, rng.randint(1, hit_die) + con_mod)
+            hp_gain, asi_note = self._level_up_once(p, rng)
             gained_hp_total += hp_gain
-            p.max_hp += hp_gain
-            p.hp += hp_gain
-
-            asi_note = self._apply_asi(p)
-            self._apply_class_progression(p)
-            p.ac = self._recompute_player_ac(p)
             if asi_note:
                 lines.append(asi_note)
 
         lines.append(f"You advance to level {p.level}. (+{gained_hp_total} max HP)")
         return lines
 
-    FEATURE_DESCRIPTIONS: Dict[str, str] = {
-        "sarcophagus": "A stone sarcophagus lies cracked and half-open. The lid is etched with worn prayers.",
-        "shelves": "Broken shelves sag under the memory of books. Loose pages whisper when your breath hits them.",
-        "altar": "A defaced altar stands at the far end. Dried wax and old offerings cling to its surface.",
-        "workbench": "A scorched workbench is scattered with snapped tools and cloudy vials.",
-        "mushrooms": "Clusters of pale mushrooms glow softly. Spores drift like lazy snow.",
-        "pews": "Bent pews crowd the room in crooked rows. Someone once prayed here—long ago.",
-        "weapons rack": "A weapon rack holds dulled steel and cracked wood. The guards never came back for it.",
-        "firepit": "A soot-black firepit squats in the center, ringed with gnawed bones and ash.",
-        "camp": "A makeshift camp—old ash, a torn blanket, and a few careful stones. A travelling merchant keeps watch here, quiet as a mouse.",
-    }
+    FEATURE_DESCRIPTIONS: Dict[str, str] = content_features.FEATURE_DESCRIPTIONS
 
-    RIDDLE_HINTS: Dict[str, List[str]] = {
-        "torch": [
-            "It eats darkness and dies in water.",
-            "Hold it aloft and secrets flee the corners.",
-        ],
-        "silence": [
-            "It speaks loudest where no one listens.",
-            "It falls between words like snow.",
-        ],
-        "time": [
-            "Kings and beggars bow to it.",
-            "It devours all stories, one heartbeat at a time.",
-        ],
-        "shadow": [
-            "It follows you, but you can never hold it.",
-            "It is born of light and fear.",
-        ],
-        "stone": [
-            "It remembers every footstep.",
-            "It outlives flesh, patience made solid.",
-        ],
-        "fire": [
-            "It eats, it dances, it leaves only smoke.",
-            "It is a friend until it is not.",
-        ],
-        "night": [
-            "It falls without mercy, even on the brave.",
-            "It turns roads into guesses.",
-        ],
-        "breath": [
-            "It is always with you until it isn't.",
-            "It fogs glass, and proves you're still here.",
-        ],
-        "hunger": [
-            "It returns no matter how often you feed it.",
-            "It can make monsters of saints.",
-        ],
-    }
+    SKULL_RIDDLES: List[Dict[str, object]] = list(content_riddles.SKULL_RIDDLES)
+    DIAL_RIDDLES: List[Dict[str, object]] = list(content_riddles.DIAL_RIDDLES)
+
+    # Indexes used for hint lookup (answer -> hints)
+    SKULL_RIDDLE_HINTS: Dict[str, List[str]] = content_riddles.riddle_index(content_riddles.SKULL_RIDDLES)
+    DIAL_RIDDLE_HINTS: Dict[str, List[str]] = content_riddles.riddle_index(content_riddles.DIAL_RIDDLES)
 
     PRESET_BUILDS: List[Dict[str, str]] = [
         {"name": "Human Barbarian", "species": "Human", "class": "Barbarian"},
@@ -744,32 +709,31 @@ class GameEngine:
         {"name": "Tiefling Warlock", "species": "Tiefling", "class": "Warlock"},
     ]
 
+    def _chapter_dungeon_size(self, rng: random.Random, *, chapter: int) -> int:
+        ch = _clamp(int(chapter), 1, MAX_CHAPTERS)
+        # Start small and grow steadily; keep maps readable.
+        growth = ((ch - 1) // 2) + ((ch - 1) // 3)  # 0..15 across chapters 1..20
+        min_size = 8 + growth
+        max_size = 12 + growth
+        return int(rng.randint(min_size, max_size))
+
+    def _chapter_tier(self, chapter: int) -> int:
+        # 0..4 across chapters 1..20
+        return _clamp((int(chapter) - 1) // 4, 0, 4)
+
     def new_game(self) -> Game:
         game_id = uuid.uuid4().hex
         seed = int(time.time() * 1000) ^ (uuid.uuid4().int & 0xFFFFFFFF)
         rng = random.Random(seed)
 
-        dungeon_size = rng.randint(8, 12)
-        rooms, start_id, boss_id = self._generate_dungeon(rng, dungeon_size)
+        dungeon_size = self._chapter_dungeon_size(rng, chapter=1)
+        rooms, start_id, boss_id = self._generate_dungeon(rng, dungeon_size, chapter=1)
 
         objective = self._roll_objective(rng, chapter=1, previous_type=None)
-        artifact = str(objective.get("artifact") or "")
-        if objective.get("type") == "recover_artifact" and artifact:
-            rooms[boss_id].items.append(artifact)
-        if objective.get("type") == "collect_sigils":
-            sigils = list(objective.get("sigils") or [])
-            self._place_objective_items(rng, rooms, start_id=start_id, boss_id=boss_id, items=sigils)
+        artifact = self._apply_objective_setup(rng, rooms, start_id=start_id, boss_id=boss_id, objective=objective)
 
-        patron = _pick(
-            rng,
-            [
-                "the Greyhaven Archivists",
-                "a nervous baron from the Shattered Marches",
-                "the Lantern Order",
-                "a masked collector with a velvet purse",
-            ],
-        )
-        place = _pick(rng, ["Greyhaven", "Emberfall", "Highmere", "Duskbridge"])
+        patron = _pick(rng, content_lore.PATRONS)
+        place = _pick(rng, content_lore.PLACES)
 
         # Player is created during the character creation phase.
         placeholder_scores = {k: 10 for k in ABILITY_KEYS}
@@ -810,25 +774,170 @@ class GameEngine:
         return game
 
     def _roll_objective(self, rng: random.Random, *, chapter: int, previous_type: Optional[str]) -> Dict[str, Any]:
-        types = ["recover_artifact", "slay_boss", "collect_sigils"]
+        ch = _clamp(int(chapter), 1, MAX_CHAPTERS)
+
+        # Objective variety increases as the campaign goes deeper.
+        types = [
+            "recover_artifact",
+            "slay_boss",
+            "collect_sigils",
+            "light_beacons",
+            "rescue_prisoner",
+            "cleanse_shrine",
+        ]
+        if ch >= 5:
+            types.append("seal_portal")
+        if ch >= 9:
+            types.append("destroy_phylactery")
+
         if previous_type in types and len(types) > 1:
             types = [t for t in types if t != previous_type]
         t = _pick(rng, types)
-        obj: Dict[str, Any] = {"type": t, "chapter": int(chapter)}
+
+        obj: Dict[str, Any] = {"type": t, "chapter": int(ch)}
         if t == "recover_artifact":
             obj["artifact"] = _pick(rng, self.ARTIFACTS)
             return obj
         if t == "slay_boss":
             return obj
-
-        sigils = [
-            "rune sigil (ember)",
-            "rune sigil (tide)",
-            "rune sigil (stone)",
-        ]
-        rng.shuffle(sigils)
-        obj["sigils"] = sigils
+        if t == "collect_sigils":
+            sigil_pool = [
+                "rune sigil (ember)",
+                "rune sigil (tide)",
+                "rune sigil (stone)",
+                "rune sigil (gale)",
+                "rune sigil (grave)",
+                "rune sigil (dawn)",
+                "rune sigil (night)",
+            ]
+            rng.shuffle(sigil_pool)
+            obj["sigils"] = sigil_pool[:3]
+            return obj
+        if t == "light_beacons":
+            obj["count"] = 3
+            obj["lit"] = 0
+            return obj
+        if t == "rescue_prisoner":
+            prisoner = _pick(rng, content_lore.PRISONERS)
+            obj["prisoner"] = prisoner
+            obj["rescued"] = "no"
+            obj["key"] = _pick(rng, self.KEYS)
+            return obj
+        if t == "cleanse_shrine":
+            obj["cleansed"] = "no"
+            return obj
+        if t == "seal_portal":
+            obj["sealed"] = "no"
+            obj["components"] = ["warding chalk", "silver dust"]
+            return obj
+        if t == "destroy_phylactery":
+            obj["destroyed"] = "no"
+            obj["phylactery"] = "black phylactery"
+            return obj
         return obj
+
+    def _apply_objective_setup(
+        self,
+        rng: random.Random,
+        rooms: Dict[str, Room],
+        *,
+        start_id: str,
+        boss_id: str,
+        objective: Dict[str, Any],
+    ) -> str:
+        t = str(objective.get("type") or "recover_artifact")
+
+        # A helper to pick a non-start, non-boss, non-exit room.
+        def candidates() -> List[Room]:
+            return [r for r in rooms.values() if r.id not in (start_id, boss_id) and (not r.is_exit)]
+
+        if t == "recover_artifact":
+            artifact = str(objective.get("artifact") or "")
+            if artifact:
+                rooms[boss_id].items.append(artifact)
+            return artifact
+
+        if t == "collect_sigils":
+            sigils = list(objective.get("sigils") or [])
+            self._place_objective_items(rng, rooms, start_id=start_id, boss_id=boss_id, items=sigils)
+            return ""
+
+        if t == "light_beacons":
+            spots = candidates()
+            rng.shuffle(spots)
+            chosen = spots[:3]
+            for r in chosen:
+                r.scenery.setdefault(
+                    "brazier",
+                    "A soot-black brazier sits cold. It looks like it wants fire more than comfort.",
+                )
+                r.room_state.setdefault("brazier_lit", "no")
+                r.desc += " A cold brazier squats here, waiting."
+            return ""
+
+        if t == "rescue_prisoner":
+            spots = candidates()
+            if spots:
+                cage_room = rng.choice(spots)
+                cage_room.scenery.setdefault(
+                    "cage",
+                    "An iron-bar cage is bolted to the floor. Someone watches you through the gaps with exhausted hope.",
+                )
+                cage_room.room_state.setdefault("cage_open", "no")
+                cage_room.desc += " An iron cage has been wedged into a corner."
+
+            # Place the needed key elsewhere so it's solvable without relying on the shop.
+            key_item = str(objective.get("key") or "iron key")
+            key_spots = [r for r in spots if ("cage" not in r.scenery)]
+            if not key_spots:
+                key_spots = spots
+            if key_spots:
+                rng.choice(key_spots).items.append(key_item)
+            return ""
+
+        if t == "cleanse_shrine":
+            spots = candidates()
+            shrine = next((r for r in spots if r.feature == "altar" or "chapel" in r.name.lower()), None)
+            if shrine is None and spots:
+                shrine = rng.choice(spots)
+                shrine.feature = "altar"
+            if shrine is not None:
+                shrine.scenery.setdefault(
+                    "defiled altar",
+                    "An altar has been fouled with ash and old blood. The air tastes wrong around it.",
+                )
+                shrine.room_state.setdefault("altar_cleansed", "no")
+                shrine.desc += " An altar here has been defaced, as if to dare the faithful."
+
+            # Guarantee at least one holy water somewhere.
+            if not any(any(it.lower() == "holy water" for it in r.items) for r in rooms.values()):
+                pool = spots or list(rooms.values())
+                if pool:
+                    rng.choice(pool).items.append("holy water")
+            return ""
+
+        if t == "seal_portal":
+            spots = candidates()
+            if spots:
+                portal = rng.choice(spots)
+                portal.scenery.setdefault(
+                    "rift",
+                    "A hairline crack in the world hangs in the air like a wound. Cold wind breathes from it.",
+                )
+                portal.room_state.setdefault("rift_sealed", "no")
+                portal.desc += " The air shivers here, as if reality is thin."
+
+            comps = [str(c) for c in (objective.get("components") or [])]
+            if comps:
+                self._place_objective_items(rng, rooms, start_id=start_id, boss_id=boss_id, items=comps)
+            return ""
+
+        if t == "destroy_phylactery":
+            name = str(objective.get("phylactery") or "black phylactery")
+            rooms[boss_id].items.append(name)
+            return ""
+
+        return ""
 
     def _place_objective_items(
         self,
@@ -851,6 +960,18 @@ class GameEngine:
             return "Slay the dungeon's boss, then escape."
         if t == "collect_sigils":
             return "Collect the three rune sigils, then escape."
+        if t == "light_beacons":
+            need = int((game.objective or {}).get("count") or 3)
+            return f"Light {need} ancient braziers, then escape."
+        if t == "rescue_prisoner":
+            who = str((game.objective or {}).get("prisoner") or "the prisoner")
+            return f"Rescue {who}, then escape."
+        if t == "cleanse_shrine":
+            return "Cleanse the defiled altar, then escape."
+        if t == "seal_portal":
+            return "Seal the planar rift, then escape."
+        if t == "destroy_phylactery":
+            return "Destroy the black phylactery, then escape."
         art = str((game.objective or {}).get("artifact") or game.artifact_item or "artifact")
         return f"Recover the {art}, then escape."
 
@@ -860,6 +981,19 @@ class GameEngine:
             return "A narrow stairway leads up… but you haven't slain the dungeon's master yet."
         if t == "collect_sigils":
             return "A narrow stairway leads up… but the sigils you need are still below."
+        if t == "light_beacons":
+            lit = int((game.objective or {}).get("lit") or 0)
+            need = int((game.objective or {}).get("count") or 3)
+            return f"A narrow stairway leads up… but only {lit}/{need} braziers burn with ancient flame."
+        if t == "rescue_prisoner":
+            who = str((game.objective or {}).get("prisoner") or "the prisoner")
+            return f"A narrow stairway leads up… but {who} is still trapped below."
+        if t == "cleanse_shrine":
+            return "A narrow stairway leads up… but the shrine below is still defiled."
+        if t == "seal_portal":
+            return "A narrow stairway leads up… but the rift still breathes cold wind from beyond."
+        if t == "destroy_phylactery":
+            return "A narrow stairway leads up… but the phylactery remains intact."
         art = str((game.objective or {}).get("artifact") or game.artifact_item or "artifact")
         return f"A narrow stairway leads up… but you came for something. You need the {art}."
 
@@ -876,6 +1010,13 @@ class GameEngine:
             sigils = set([str(s).lower() for s in (game.objective or {}).get("sigils") or []])
             if item.lower() in sigils:
                 return ["The sigil thrums faintly, as if it recognizes you."]
+        if t == "destroy_phylactery":
+            name = str((game.objective or {}).get("phylactery") or "black phylactery")
+            if item.lower() == name.lower():
+                return [
+                    "The air chills as you lift it. Something on the far side of the world notices.",
+                    "You should destroy it—now."
+                ]
         return []
 
     def _objective_completed(self, game: Game) -> bool:
@@ -887,6 +1028,18 @@ class GameEngine:
             need = [str(s).lower() for s in (game.objective or {}).get("sigils") or []]
             have = set([it.lower() for it in game.player.inventory])
             return all(n in have for n in need)
+        if t == "light_beacons":
+            lit = int((game.objective or {}).get("lit") or 0)
+            need = int((game.objective or {}).get("count") or 3)
+            return lit >= need
+        if t == "rescue_prisoner":
+            return str((game.objective or {}).get("rescued") or "no") == "yes"
+        if t == "cleanse_shrine":
+            return str((game.objective or {}).get("cleansed") or "no") == "yes"
+        if t == "seal_portal":
+            return str((game.objective or {}).get("sealed") or "no") == "yes"
+        if t == "destroy_phylactery":
+            return str((game.objective or {}).get("destroyed") or "no") == "yes"
         art = str((game.objective or {}).get("artifact") or game.artifact_item or "")
         return bool(art and (art in game.player.inventory))
 
@@ -1033,7 +1186,7 @@ class GameEngine:
 
         return p
 
-    def _generate_dungeon(self, rng: random.Random, size: int) -> Tuple[Dict[str, Room], str, str]:
+    def _generate_dungeon(self, rng: random.Random, size: int, *, chapter: int) -> Tuple[Dict[str, Room], str, str]:
         rooms: Dict[str, Room] = {}
         ids = [uuid.uuid4().hex[:8] for _ in range(size)]
 
@@ -1112,9 +1265,64 @@ class GameEngine:
             room = Room(id=rid, name=name, desc=desc, x=x, y=y, feature=feature_by_theme.get(theme, ""))
             rooms[rid] = room
 
+        # Add ambient scenery to increase "look" targets and story texture.
+        ch = _clamp(int(chapter), 1, MAX_CHAPTERS)
+        scenery_chance = _clamp(0.25 + (ch * 0.01), 0.25, 0.50)
+        scenery_pool: List[Tuple[str, str]] = [
+            (
+                "statue",
+                "A cracked stone statue watches the room with a face worn smooth by time. Something about it feels deliberate.",
+            ),
+            (
+                "fountain",
+                "A dry fountain bowl is stained dark. A few drops still gather in the deepest crack, impossibly cold.",
+            ),
+            (
+                "inscription",
+                "An inscription curls along the stone in old script. Some letters have been gouged out, as if someone feared the words.",
+            ),
+            (
+                "bones",
+                "Old bones lie in a careless scatter, gnawed clean. The dungeon has eaten here before.",
+            ),
+            (
+                "tapestry",
+                "A moth-eaten tapestry hangs in tatters. A battle scene is stitched in faded thread—victory, then smoke.",
+            ),
+            (
+                "mural",
+                "A flaking mural depicts a door beneath three symbols: sun, moon, and star.",
+            ),
+            (
+                "chains",
+                "Rusty chains hang from iron rings set into the wall. They sway when you breathe.",
+            ),
+        ]
+        placed_any = False
+        for rid, r in rooms.items():
+            if rid in (start_id, boss_id):
+                continue
+            if rng.random() > scenery_chance:
+                continue
+            key, text = _pick(rng, scenery_pool)
+            if key in r.scenery:
+                continue
+            r.scenery[key] = text
+            placed_any = True
+            # Keep room descriptions short; mention only occasionally.
+            if rng.random() < 0.20:
+                r.desc += f" You notice a {key}."
+
+        if not placed_any:
+            candidates = [rid for rid in ids if rid not in (start_id, boss_id)]
+            if candidates:
+                rid = _pick(rng, candidates)
+                key, text = _pick(rng, scenery_pool)
+                rooms[rid].scenery[key] = text
+
         # Boss room gets a boss.
         boss_room = rooms[boss_id]
-        boss_room.monster = self._make_monster(rng, boss=True)
+        boss_room.monster = self._make_monster(rng, boss=True, chapter=chapter)
         boss_room.desc += " The presence here is oppressive—something powerful lairs within."
 
         # Guaranteed path: connect in id order (placement is adjacent by construction).
@@ -1158,31 +1366,40 @@ class GameEngine:
         rooms[exit_room_id].is_exit = True
         rooms[exit_room_id].desc += " A narrow stairway here leads back to the surface."
 
-        self._place_puzzles_and_loot(rng, rooms, start_id, boss_id)
+        self._place_puzzles_and_loot(rng, rooms, start_id, boss_id, chapter=chapter)
         return rooms, start_id, boss_id
 
     def _connect(self, a: Room, b: Room, direction: str) -> None:
         a.exits[direction] = b.id
         b.exits[DIRECTIONS[direction]] = a.id
 
-    def _make_monster(self, rng: random.Random, boss: bool) -> Monster:
+    def _make_monster(self, rng: random.Random, boss: bool, *, chapter: int) -> Monster:
         if boss:
             name, hp, ac, atk, dmg, flavor = _pick(rng, list(self.BOSSES))
         else:
             name, hp, ac, atk, dmg, flavor = _pick(rng, list(self.MONSTERS))
-        return Monster(name=name, hp=hp, ac=ac, attack_bonus=atk, damage_die=dmg, flavor=flavor)
 
-    def _place_puzzles_and_loot(self, rng: random.Random, rooms: Dict[str, Room], start_id: str, boss_id: str) -> None:
+        tier = self._chapter_tier(int(chapter))
+        # Gentle scaling to keep later chapters tense without becoming unfair.
+        hp = int(hp + (tier * (6 if boss else 3)) + rng.randint(0, tier * (4 if boss else 2)))
+        ac = int(ac + (1 if (boss and tier >= 2) else 0) + (1 if (not boss and tier >= 3) else 0))
+        atk = int(atk + (tier // 2))
+        dmg_n, dmg_s = dmg
+        if boss and tier >= 4:
+            dmg_n = int(dmg_n + 1)
+        elif (not boss) and tier >= 4 and dmg_s <= 6:
+            dmg_s = 8
+
+        return Monster(name=name, hp=hp, ac=ac, attack_bonus=atk, damage_die=(int(dmg_n), int(dmg_s)), flavor=flavor)
+
+    def _place_puzzles_and_loot(self, rng: random.Random, rooms: Dict[str, Room], start_id: str, boss_id: str, *, chapter: int) -> None:
         room_ids = [rid for rid in rooms.keys() if rid not in (start_id, boss_id)]
         rng.shuffle(room_ids)
 
-        key_item = _pick(rng, self.KEYS)
         locked_room_id = room_ids[0]
         key_room_id = room_ids[1] if len(room_ids) > 1 else start_id
 
-        rooms[key_room_id].items.append(key_item)
-
-        # Locked door puzzle blocks entry to the boss room from at least one direction
+        # Boss gate puzzle blocks entry to the boss room from at least one direction.
         # We pick a neighbor of boss (if any) and make that exit locked.
         boss_neighbors = list(rooms[boss_id].exits.values())
         if boss_neighbors:
@@ -1194,20 +1411,49 @@ class GameEngine:
                     dir_to_boss = d
                     break
             if dir_to_boss:
-                rooms[approach_id].puzzle = "locked_door"
-                rooms[approach_id].puzzle_state = {
-                    "dir": dir_to_boss,
-                    "key": key_item,
-                    "unlocked": "no",
-                }
-                rooms[approach_id].desc += " A heavy door nearby is engraved with warding runes."
+                if rng.random() < 0.65:
+                    key_item = _pick(rng, self.KEYS)
+                    rooms[key_room_id].items.append(key_item)
+                    rooms[approach_id].puzzle = "locked_door"
+                    rooms[approach_id].puzzle_state = {
+                        "dir": dir_to_boss,
+                        "key": key_item,
+                        "unlocked": "no",
+                    }
+                    rooms[approach_id].desc += " A heavy door nearby is engraved with warding runes."
+                else:
+                    lever = _pick(rng, ["sun", "moon", "star"])
+                    rooms[approach_id].puzzle = "lever_door"
+                    rooms[approach_id].puzzle_state = {
+                        "dir": dir_to_boss,
+                        "lever": lever,
+                        "unlocked": "no",
+                    }
+                    rooms[approach_id].scenery.setdefault(
+                        "lever console",
+                        "A waist-high console holds three iron levers marked with faded glyphs: sun, moon, and star.",
+                    )
+                    rooms[approach_id].desc += " A lever console stands before a sealed door."
+
+                    # Place a clue elsewhere.
+                    clue_candidates = [rid for rid in room_ids if rid not in (approach_id, boss_id) and rooms[rid].puzzle is None]
+                    if clue_candidates:
+                        clue_room = rooms[rng.choice(clue_candidates)]
+                        clue_room.scenery.setdefault(
+                            "graffiti",
+                            f"Someone scratched a warning into the stone: 'The {lever} opens the way. The others bite.'",
+                        )
+                        clue_room.desc += " Scratched graffiti mars the stone, half-hidden under grime."
 
         # Riddle puzzle grants a useful item
         riddle_room_id = locked_room_id
         rooms[riddle_room_id].puzzle = "riddle"
-        answer = _pick(rng, ["torch", "silence", "time", "shadow", "stone", "fire", "night", "breath", "hunger"])
+        r1 = rng.choice(self.SKULL_RIDDLES)
+        answer = str(r1.get("answer") or "time")
+        prompt = str(r1.get("prompt") or "Name me, and I will grant you a gift.")
         rooms[riddle_room_id].puzzle_state = {
             "answer": answer,
+            "prompt": prompt,
             "solved": "no",
             "reward": _pick(rng, ["smoke bomb", "holy water", "antitoxin", _pick(rng, self.POTIONS)]),
         }
@@ -1224,29 +1470,72 @@ class GameEngine:
         )
         if riddle2_id:
             rooms[riddle2_id].puzzle = "riddle"
-            answer2 = _pick(rng, ["torch", "silence", "time", "shadow", "stone", "fire", "night", "breath", "hunger"])
-            if answer2 == answer:
-                answer2 = _pick(rng, ["torch", "silence", "time", "shadow", "stone", "fire", "night", "breath", "hunger"])
+            # Ensure the second riddle is a different prompt/answer.
+            for _ in range(10):
+                r2 = rng.choice(self.SKULL_RIDDLES)
+                answer2 = str(r2.get("answer") or "shadow")
+                if answer2.lower() != answer.lower():
+                    break
+            else:
+                r2 = rng.choice(self.SKULL_RIDDLES)
+                answer2 = str(r2.get("answer") or "shadow")
+            prompt2 = str(r2.get("prompt") or "Speak, and be rewarded.")
             rooms[riddle2_id].puzzle_state = {
                 "answer": answer2,
+                "prompt": prompt2,
                 "solved": "no",
                 "reward": _pick(rng, ["smoke bomb", "holy water", "antitoxin", _pick(rng, self.POTIONS)]),
             }
             rooms[riddle2_id].desc += " A second skull has been set here, as if to mock the first."
 
+        # Add a few optional puzzles for variety (scaled by chapter tier).
+        tier = self._chapter_tier(int(chapter))
+        extra_puzzles = 1 + tier
+        puzzle_spots = [rid for rid in room_ids if rooms[rid].puzzle is None and (not rooms[rid].is_exit)]
+        rng.shuffle(puzzle_spots)
+        for rid in puzzle_spots[:extra_puzzles]:
+            kind = _pick(rng, ["rune_dial", "trapped_chest"])
+            if kind == "rune_dial":
+                rooms[rid].puzzle = "rune_dial"
+                r = rng.choice(self.DIAL_RIDDLES)
+                ans = str(r.get("answer") or "key")
+                prompt = str(r.get("prompt") or "Set the dial with intention.")
+                rooms[rid].puzzle_state = {
+                    "answer": ans,
+                    "prompt": prompt,
+                    "solved": "no",
+                    "reward": _pick(rng, ["holy water", "antitoxin", _pick(rng, self.POTIONS)]),
+                }
+                rooms[rid].desc += " A stone dial set with runes is mounted in the wall."
+            else:
+                rooms[rid].puzzle = "trapped_chest"
+                dc = 11 + tier
+                rooms[rid].puzzle_state = {
+                    "dc": str(dc),
+                    "disarmed": "no",
+                    "solved": "no",
+                    "reward": _pick(rng, ["coin pouch", _pick(rng, self.POTIONS), "holy water", "antitoxin"]),
+                }
+                rooms[rid].desc += " A heavy chest sits here, its lock surrounded by suspicious scratches."
+
         # Sprinkle monsters and extra loot
+        ch = _clamp(int(chapter), 1, MAX_CHAPTERS)
+        monster_chance = _clamp(0.40 + (ch * 0.005), 0.40, 0.60)
+        loot_chance = _clamp(0.30 + (ch * 0.003), 0.30, 0.45)
         for rid, room in rooms.items():
             if rid in (start_id, boss_id):
                 continue
-            if rng.random() < 0.45 and room.monster is None:
-                room.monster = self._make_monster(rng, boss=False)
-            if rng.random() < 0.35:
+            if rng.random() < monster_chance and room.monster is None:
+                room.monster = self._make_monster(rng, boss=False, chapter=chapter)
+            if rng.random() < loot_chance:
                 room.items.append(
                     _pick(
                         rng,
                         [
                             "rope",
                             "chalk",
+                            "warding chalk",
+                            "silver dust",
                             "ration",
                             "lockpick",
                             "dagger",
@@ -1291,8 +1580,10 @@ class GameEngine:
             "seed": game.seed,
             "won": game.won,
             "lost": game.lost,
+            "campaignComplete": game.campaign_complete,
             "phase": game.phase,
             "chapter": game.chapter,
+            "maxChapters": MAX_CHAPTERS,
             "player": {
                 "name": game.player.name,
                 "species": game.player.species,
@@ -1474,6 +1765,12 @@ class GameEngine:
         arg = " ".join(rest).strip()
 
         if game.won:
+            if game.campaign_complete or int(game.chapter) >= MAX_CHAPTERS:
+                game.campaign_complete = True
+                return {
+                    "text": "You've completed the 20-level campaign. Refresh the page to begin a new run.",
+                    "state": self.snapshot(game),
+                }
             if verb in ("continue", "descend", "next"):
                 response_lines = self._cmd_continue(game, rng)
                 game.rng_state = rng.getstate()
@@ -1527,6 +1824,10 @@ class GameEngine:
             response_lines.extend(self._cmd_reckless(game))
         elif verb in ("inspire", "inspiration"):
             response_lines.extend(self._cmd_inspire(game, rng))
+        elif verb in ("hide", "stealth"):
+            response_lines.extend(self._cmd_hide(game, rng))
+        elif verb in ("hex",):
+            response_lines.extend(self._cmd_hex(game, rng))
         elif verb in ("equip", "wield"):
             response_lines.extend(self._cmd_equip(game, arg))
         elif verb in ("spells",):
@@ -1550,7 +1851,7 @@ class GameEngine:
         return (
             "Commands: look | go <north|south|east|west> | take <item> | use <item> | equip <item> | "
             "attack | shoot | cast <spell> | spells | stats | inventory | rest | shop | buy <item> | sell <item> | gold | help\n"
-            "Class features: rage | reckless | inspire | continue\n"
+            "Class features: rage | reckless | inspire | hide | hex\n"
             "Tips: Abbreviations n/s/e/w work. If you pick up a weapon/armor, `equip <name>` (or `use <name>`) to ready it. "
             "Some doors require keys. Some puzzles require answers."
         )
@@ -1749,9 +2050,14 @@ class GameEngine:
 
     SHOP_STOCK: Dict[str, int] = {
         "healing potion": 50,
+        "greater healing potion": 150,
+        "potion of heroism": 125,
+        "potion of invisibility": 250,
         "rope": 5,
         "ration": 5,
         "chalk": 1,
+        "warding chalk": 10,
+        "silver dust": 25,
         "lockpick": 25,
         "holy water": 25,
         "antitoxin": 50,
@@ -1851,7 +2157,15 @@ class GameEngine:
             return ["That isn't a ranged weapon."]
         die = w.get("damage", (1, 6))  # type: ignore[assignment]
         to_hit = self._weapon_to_hit_bonus(game.player, weapon)
-        d20 = rng.randint(1, 20)
+
+        advantage = False
+        if room.combat_state.get("player_hidden") == "yes":
+            advantage = True
+            room.combat_state["player_hidden"] = "no"
+
+        roll1 = rng.randint(1, 20)
+        roll2 = rng.randint(1, 20) if advantage else None
+        d20 = max(roll1, roll2) if roll2 is not None else roll1
         inspiration = 0
         if game.player.inspired_die:
             inspiration = rng.randint(1, game.player.inspired_die)
@@ -1872,13 +2186,19 @@ class GameEngine:
                 dmg += _roll(rng, extra_dice, 6)
                 room.combat_state["sneak_used"] = "yes"
 
+            # Warlock Hex: +1d6 necrotic per hit (doubled on crit)
+            if game.player.char_class == "Warlock" and room.combat_state.get("hex") == "yes":
+                dmg += _roll(rng, 2 if crit else 1, 6)
+
             dmg = max(0, dmg)
             room.monster.hp = max(0, room.monster.hp - dmg)
+            adv_txt = " (adv)" if advantage else ""
             insp_txt = f"+{inspiration}" if inspiration else ""
-            lines = [f"You fire your {weapon} (roll {d20}+{to_hit}{insp_txt}={total}) for {dmg} damage."]
+            lines = [f"You fire your {weapon}{adv_txt} (roll {d20}+{to_hit}{insp_txt}={total}) for {dmg} damage."]
         else:
+            adv_txt = " (adv)" if advantage else ""
             insp_txt = f"+{inspiration}" if inspiration else ""
-            lines = [f"Your shot misses (roll {d20}+{to_hit}{insp_txt}={total})."]
+            lines = [f"Your shot misses{adv_txt} (roll {d20}+{to_hit}{insp_txt}={total})."]
         if room.monster.hp <= 0:
             lines.append(self._on_monster_defeated(game, rng, room))
             return lines
@@ -1929,7 +2249,15 @@ class GameEngine:
         if room.monster is None or room.monster.hp <= 0:
             return ["There's nothing here to target."]
         to_hit = self._spell_attack_bonus(p)
-        d20 = rng.randint(1, 20)
+
+        advantage = False
+        if room.combat_state.get("player_hidden") == "yes":
+            advantage = True
+            room.combat_state["player_hidden"] = "no"
+
+        roll1 = rng.randint(1, 20)
+        roll2 = rng.randint(1, 20) if advantage else None
+        d20 = max(roll1, roll2) if roll2 is not None else roll1
         inspiration = 0
         if p.inspired_die:
             inspiration = rng.randint(1, p.inspired_die)
@@ -1944,12 +2272,17 @@ class GameEngine:
                 beams = int(die[0])
                 dmg += beams * _ability_mod(p.ability_scores.get("cha", 10))
 
+            if p.char_class == "Warlock" and room.combat_state.get("hex") == "yes":
+                dmg += _roll(rng, 2 if crit else 1, 6)
+
             room.monster.hp = max(0, room.monster.hp - dmg)
             insp_txt = f"+{inspiration}" if inspiration else ""
-            lines = [f"You cast {spell} (roll {d20}+{to_hit}{insp_txt}={total}) for {dmg} damage."]
+            adv_txt = " (adv)" if advantage else ""
+            lines = [f"You cast {spell}{adv_txt} (roll {d20}+{to_hit}{insp_txt}={total}) for {dmg} damage."]
         else:
             insp_txt = f"+{inspiration}" if inspiration else ""
-            lines = [f"Your spell misses (roll {d20}+{to_hit}{insp_txt}={total})."]
+            adv_txt = " (adv)" if advantage else ""
+            lines = [f"Your spell misses{adv_txt} (roll {d20}+{to_hit}{insp_txt}={total})."]
         if room.monster.hp <= 0:
             lines.append(self._on_monster_defeated(game, rng, room))
             return lines
@@ -1965,6 +2298,11 @@ class GameEngine:
             lines.append("You see: " + ", ".join(room.items) + ".")
         if room.exits:
             lines.append("Exits: " + ", ".join(sorted(room.exits.keys())) + ".")
+        if room.scenery:
+            notable = sorted(list(room.scenery.keys()))
+            if len(notable) > 5:
+                notable = notable[:5] + ["..."]
+            lines.append("Notable: " + ", ".join(notable) + ".")
         if room.is_exit:
             lines.append("A stairway leads up. (Try `leave`.)")
         if room.feature == "camp":
@@ -1972,8 +2310,14 @@ class GameEngine:
         if room.puzzle == "locked_door":
             key_name = room.puzzle_state.get("key", "key")
             lines.append(f"A rune-locked door is here. (Try `look door` / `look runes` / `use {key_name}`.)")
+        if room.puzzle == "lever_door" and room.puzzle_state.get("unlocked") != "yes":
+            lines.append("A sealed door is here. (Try `look lever console` / `look graffiti` / `use lever <sun|moon|star>`.)")
         if room.puzzle == "riddle" and room.puzzle_state.get("solved") != "yes":
             lines.append("A talking skull watches you. (Try `look skull`.)")
+        if room.puzzle == "rune_dial" and room.puzzle_state.get("solved") != "yes":
+            lines.append("A rune dial is set into the wall. (Try `look dial` / `use dial <word>`.)")
+        if room.puzzle == "trapped_chest" and room.puzzle_state.get("solved") != "yes":
+            lines.append("A suspicious chest waits here. (Try `look chest` / `use chest` / `use lockpick`.)")
         return "\n".join(lines)
 
     def _ability_check(self, rng: random.Random, player: Player, ability: str, dc: int) -> Tuple[int, int, bool]:
@@ -2001,12 +2345,11 @@ class GameEngine:
                 "'Gold spends the same in the dark,' they murmur. (Try `shop`, then `buy <item>`.)",
             ]
 
-        # Door / runes (locked door puzzle)
+        # Door / runes (door puzzles)
         if target in ("door", "rune", "runes", "lock", "ward", "wards", "warding", "warding runes"):
-            if room.puzzle != "locked_door":
+            if room.puzzle not in ("locked_door", "lever_door"):
                 return ["You search the stonework for a door worth noting, but find nothing unusual."]
             dir_to = room.puzzle_state.get("dir", "somewhere")
-            key_name = room.puzzle_state.get("key", "key")
             unlocked = room.puzzle_state.get("unlocked") == "yes"
             lines = [
                 "The door is iron-banded and set into the rock like a tomb seal.",
@@ -2015,12 +2358,18 @@ class GameEngine:
             if unlocked:
                 lines.append("The runes are dim and cold. The lock has been broken.")
             else:
-                lines.append("Warding runes crawl over the frame like faint embers.")
-                roll, total, ok = self._ability_check(rng, game.player, "int", 12)
-                if ok:
-                    lines.append(f"You study them (INT check {roll} -> {total}). They name a key: the {key_name}.")
+                if room.puzzle == "locked_door":
+                    key_name = room.puzzle_state.get("key", "key")
+                    lines.append("Warding runes crawl over the frame like faint embers.")
+                    roll, total, ok = self._ability_check(rng, game.player, "int", 12)
+                    if ok:
+                        lines.append(f"You study them (INT check {roll} -> {total}). They name a key: the {key_name}.")
+                        lines.append("A skilled hand might also pick the lock. (Try `use lockpick`.)")
+                    else:
+                        lines.append(f"You try to decipher them (INT check {roll} -> {total}), but the meaning slips away.")
                 else:
-                    lines.append(f"You try to decipher them (INT check {roll} -> {total}), but the meaning slips away.")
+                    lines.append("A ward seals the seam. The door doesn't want keys—it wants the right choice.")
+                    lines.append("A lever console sits nearby. (Try `look lever console` / `use lever <sun|moon|star>`.)")
             return lines
 
         # Riddle skull
@@ -2029,24 +2378,68 @@ class GameEngine:
                 return ["No skull addresses you here—only dust and stone."]
             solved = room.puzzle_state.get("solved") == "yes"
             expected = str(room.puzzle_state.get("answer", "")).lower()
+            prompt = str(room.puzzle_state.get("prompt") or "")
             if solved:
                 return [
                     "The skull sits slack-jawed now.",
                     "Whatever animus stirred within it has gone quiet.",
                 ]
-            hints = self.RIDDLE_HINTS.get(expected, [])
+            hints = self.SKULL_RIDDLE_HINTS.get(expected, [])
             lines = [
                 "The skull's teeth click softly as if counting your heartbeats.",
-                "It waits for a single word—spoken with certainty.",
+                (f"It rasps: '{prompt}'" if prompt else "It waits for a single word—spoken with certainty."),
                 "(Try `use answer <word>`.)",
             ]
             if hints:
                 roll, total, ok = self._ability_check(rng, game.player, "wis", 12)
                 if ok:
-                    lines.append(f"A sudden intuition hits (WIS check {roll} -> {total}): {hints[0]}")
+                    hint = rng.choice(hints)
+                    lines.append(f"A sudden intuition hits (WIS check {roll} -> {total}): {hint}")
                 else:
                     lines.append(f"You search your memory (WIS check {roll} -> {total}), but grasp only fragments.")
             return lines
+
+        # Rune dial puzzle
+        if target in ("dial", "rune dial", "runes dial"):
+            if room.puzzle != "rune_dial":
+                return ["You look for a dial or mechanism, but see none."]
+            if room.puzzle_state.get("solved") == "yes":
+                return ["The dial sits inert now, its runes dulled as if ashamed."]
+            expected = str(room.puzzle_state.get("answer", "")).lower()
+            prompt = str(room.puzzle_state.get("prompt") or "")
+            hints = self.DIAL_RIDDLE_HINTS.get(expected, [])
+            lines = [
+                "A ring of runes surrounds a stone dial that can be turned with a firm grip.",
+                (prompt if prompt else "It feels like it wants a single word—set with intention."),
+                "(Try `use dial <word>`.)",
+            ]
+            if hints:
+                roll, total, ok = self._ability_check(rng, game.player, "int", 12)
+                if ok:
+                    hint = rng.choice(hints)
+                    lines.append(f"You note etched wear-marks (INT check {roll} -> {total}): {hint}")
+                else:
+                    lines.append(f"You study the runes (INT check {roll} -> {total}) but learn little.")
+            return lines
+
+        # Trapped chest puzzle
+        if target in ("chest", "lock", "trap"):
+            if room.puzzle != "trapped_chest":
+                return ["You don't see any chest worth worrying about."]
+            if room.puzzle_state.get("solved") == "yes":
+                return ["The chest lies open and empty now."]
+            dc = int(room.puzzle_state.get("dc") or 12)
+            disarmed = room.puzzle_state.get("disarmed") == "yes"
+            if disarmed:
+                return [
+                    "The chest's trap has been disarmed. The lock is still stubborn, but harmless.",
+                    "(Try `use chest`.)",
+                ]
+            return [
+                "The chest is heavy and old. Fine scratches radiate from the keyhole like a spiderweb.",
+                f"Your instincts say: trap. (DC ~{dc})",
+                "(Try `use chest` or `use lockpick`.)",
+            ]
 
         # Shrine dressing: offerings cups
         if target in ("cups", "offerings", "offering", "offerings cups", "offering cups"):
@@ -2070,6 +2463,40 @@ class GameEngine:
                 if room.feature != feature:
                     continue
                 return [desc]
+
+        # Scenery objects (dynamic per-room interactables)
+        if room.scenery:
+            matched = next(
+                (
+                    k
+                    for k in sorted(room.scenery.keys(), key=len, reverse=True)
+                    if target == k or target in k or k in target
+                ),
+                None,
+            )
+            if matched:
+                lines = [str(room.scenery.get(matched) or "")]
+                if matched == "brazier":
+                    lit = room.room_state.get("brazier_lit") == "yes"
+                    lines.append("It is burning." if lit else "It is unlit.")
+                    if str((game.objective or {}).get("type")) == "light_beacons":
+                        cur = int((game.objective or {}).get("lit") or 0)
+                        need = int((game.objective or {}).get("count") or 3)
+                        lines.append(f"Objective: {cur}/{need} braziers lit.")
+                    lines.append("(Try `use brazier`.)")
+                if matched == "cage":
+                    opened = room.room_state.get("cage_open") == "yes"
+                    lines.append("The cage door hangs open." if opened else "The cage door is locked.")
+                    lines.append("(Try `use cage`.)")
+                if matched == "defiled altar":
+                    cleansed = room.room_state.get("altar_cleansed") == "yes"
+                    lines.append("The altar is cleansed." if cleansed else "It is still defiled.")
+                    lines.append("(Try `use defiled altar`.)")
+                if matched == "rift":
+                    sealed = room.room_state.get("rift_sealed") == "yes"
+                    lines.append("The rift is sealed." if sealed else "The rift is open.")
+                    lines.append("(Try `use rift`.)")
+                return [ln for ln in lines if ln]
 
         # Exit / stairs
         if target in ("stairs", "stair", "surface", "exit"):
@@ -2145,8 +2572,13 @@ class GameEngine:
 
         room = game.rooms[game.current_room_id]
 
+        escaped_line = None
         if room.monster is not None and room.monster.hp > 0:
-            return ["The enemy blocks your escape! You'll need to fight or find another way."]
+            if room.combat_state.get("escape_ok") == "yes":
+                room.combat_state["escape_ok"] = "no"
+                escaped_line = "Using the distraction, you slip past your foe."
+            else:
+                return ["The enemy blocks your escape! You'll need to fight or find another way."]
 
         if not direction:
             return ["Go where?"]
@@ -2154,11 +2586,13 @@ class GameEngine:
         if direction not in room.exits:
             return ["No passage that way."]
 
-        # locked door puzzle on this room
-        if room.puzzle == "locked_door":
+        # door puzzles on this room
+        if room.puzzle in ("locked_door", "lever_door"):
             if room.puzzle_state.get("dir") == direction and room.puzzle_state.get("unlocked") != "yes":
-                key_name = room.puzzle_state.get("key", "key")
-                return [f"The rune-locked door resists you. You'll need the {key_name}."]
+                if room.puzzle == "locked_door":
+                    key_name = room.puzzle_state.get("key", "key")
+                    return [f"The rune-locked door resists you. You'll need the {key_name} (or tools to pick it)."]
+                return ["The sealed door refuses to budge. The console must be solved first."]
 
         game.current_room_id = room.exits[direction]
         new_room = game.rooms[game.current_room_id]
@@ -2166,14 +2600,18 @@ class GameEngine:
         # New room = new fight context.
         new_room.combat_state.clear()
 
-        lines = [self._describe_room(game)]
+        lines: List[str] = []
+        if escaped_line:
+            lines.append(escaped_line)
+        lines.append(self._describe_room(game))
 
         # auto-trigger riddle hint
         if new_room.puzzle == "riddle" and new_room.puzzle_state.get("solved") != "yes":
-            lines.append(
-                "The skull's jaw chatters: 'I devour all; I bow to none. Name me, and I will grant you a gift.' "
-                "(Try `use answer <word>`.)"
-            )
+            prompt = str(new_room.puzzle_state.get("prompt") or "")
+            if prompt:
+                lines.append(f"The skull's jaw chatters: '{prompt}' (Try `use answer <word>`.)")
+            else:
+                lines.append("A talking skull watches you. (Try `look skull` / `use answer <word>`.)")
 
         # If monster exists, it may ambush
         if new_room.monster is not None and new_room.monster.hp > 0 and rng.random() < 0.25:
@@ -2195,6 +2633,57 @@ class GameEngine:
         if arg in self.WEAPONS or arg in self.ARMOR or arg in self.SHIELDS:
             return self._cmd_equip(game, arg)
 
+        # Smoke bomb: create an opening to escape one move.
+        if "smoke bomb" in arg:
+            idx = next((i for i, it in enumerate(game.player.inventory) if "smoke bomb" in it.lower()), None)
+            if idx is None:
+                return ["You don't have a smoke bomb."]
+            if room.monster is None or room.monster.hp <= 0:
+                return ["You crack the orb. Smoke blooms, then drifts away. (No threat here.)"]
+            game.player.inventory.pop(idx)
+            room.combat_state["escape_ok"] = "yes"
+            return ["You smash the smoke bomb. Thick smoke floods the room.", "You can escape this room once. (Try `go <direction>`.)"]
+
+        # Lockpick: pick locks on doors/chests/cages.
+        if "lockpick" in arg:
+            if not any("lockpick" in it.lower() for it in game.player.inventory):
+                return ["You don't have lockpicks."]
+
+            # Door lockpicking.
+            if room.puzzle == "locked_door" and room.puzzle_state.get("unlocked") != "yes":
+                roll, total, ok = self._ability_check(rng, game.player, "dex", 14)
+                if ok:
+                    room.puzzle_state["unlocked"] = "yes"
+                    return [f"You work the warded lock (DEX check {roll} -> {total}). The runes gutter out."]
+                return [f"Your picks scrape uselessly (DEX check {roll} -> {total}). The ward holds."]
+
+            # Chest lockpicking.
+            if room.puzzle == "trapped_chest" and room.puzzle_state.get("solved") != "yes":
+                dc = int(room.puzzle_state.get("dc") or 12)
+                roll, total, ok = self._ability_check(rng, game.player, "dex", dc)
+                if ok:
+                    room.puzzle_state["disarmed"] = "yes"
+                    return [f"You find the trap's trigger (DEX check {roll} -> {total}) and disable it.", "Now you can open the chest. (Try `use chest`.)"]
+                # small trap sting
+                dmg = _roll(rng, 1, 6)
+                game.player.hp = max(0, game.player.hp - dmg)
+                if game.player.hp <= 0:
+                    game.lost = True
+                    return [f"Your pick slips. A needle snaps out—{dmg} damage.", "You collapse. Darkness takes you. (Refresh to start a new adventure.)"]
+                return [f"You fumble the mechanism (DEX check {roll} -> {total}). A needle bites you for {dmg} damage."]
+
+            # Cage lockpicking.
+            if "cage" in room.scenery and room.room_state.get("cage_open") != "yes":
+                roll, total, ok = self._ability_check(rng, game.player, "dex", 13)
+                if ok:
+                    room.room_state["cage_open"] = "yes"
+                    if str((game.objective or {}).get("type")) == "rescue_prisoner":
+                        game.objective["rescued"] = "yes"
+                    return [f"You pick the cage lock (DEX check {roll} -> {total}).", "The captive staggers free, whispering thanks."]
+                return [f"You can't find purchase in the lock (DEX check {roll} -> {total})."]
+
+            return ["You don't see a lock here that your picks can help with."]
+
         # Unlock rune-locked door with the named key.
         if room.puzzle == "locked_door" and room.puzzle_state.get("unlocked") != "yes":
             required_key = str(room.puzzle_state.get("key", "")).lower()
@@ -2203,6 +2692,25 @@ class GameEngine:
                     room.puzzle_state["unlocked"] = "yes"
                     return [f"You turn the {required_key}. The warding runes gutter out."]
                 return [f"You don't have the {required_key}."]
+
+        # Lever-gated boss door.
+        if room.puzzle == "lever_door" and room.puzzle_state.get("unlocked") != "yes":
+            if arg.startswith("lever") or "lever console" in arg:
+                parts = arg.split()
+                if len(parts) < 2 or parts[-1].strip().lower() in ("lever", "console"):
+                    return ["Choose a lever: `use lever sun` or `use lever moon` or `use lever star`."]
+                chosen = parts[-1].strip().lower()
+                expected = str(room.puzzle_state.get("lever") or "").lower()
+                if chosen == expected:
+                    room.puzzle_state["unlocked"] = "yes"
+                    return ["The console clicks. Somewhere deep in the door, a lock gives way.", "The sealed door is unlocked."]
+                # wrong lever: small punishment
+                dmg = _roll(rng, 1, 6) + 1
+                game.player.hp = max(0, game.player.hp - dmg)
+                if game.player.hp <= 0:
+                    game.lost = True
+                    return [f"You pull the wrong lever. A jolt of force slams you—{dmg} damage.", "You collapse. Darkness takes you. (Refresh to start a new adventure.)"]
+                return [f"You pull the {chosen} lever. The ward bites back—{dmg} damage.", "The door remains sealed."]
 
         # Convert any coin pouch in inventory into usable gold.
         if "coin" in arg and "pouch" in arg:
@@ -2215,18 +2723,37 @@ class GameEngine:
 
         # Potion use
         if "potion" in arg:
-            item_idx = next((i for i, it in enumerate(game.player.inventory) if "potion" in it.lower()), None)
+            inv = [it.lower() for it in game.player.inventory]
+            item_idx = next((i for i, it in enumerate(inv) if (arg in it and "potion" in it)), None)
+            if item_idx is None:
+                item_idx = next((i for i, it in enumerate(inv) if "potion" in it), None)
             if item_idx is None:
                 return ["You don't have a potion."]
-            potion = game.player.inventory.pop(item_idx)
-            heal = 0
-            if potion == "healing potion":
-                heal = _roll(rng, 2, 4) + 2
-            else:
-                heal = _roll(rng, 4, 4) + 4
-            old = game.player.hp
-            game.player.hp = _clamp(game.player.hp + heal, 0, game.player.max_hp)
-            return [f"You drink the {potion} and recover {game.player.hp - old} HP."]
+            potion = game.player.inventory.pop(item_idx).lower()
+
+            if potion in ("healing potion", "greater healing potion", "superior healing potion"):
+                if potion == "healing potion":
+                    heal = _roll(rng, 2, 4) + 2
+                elif potion == "greater healing potion":
+                    heal = _roll(rng, 4, 4) + 4
+                else:
+                    heal = _roll(rng, 8, 4) + 8
+                old = game.player.hp
+                game.player.hp = _clamp(game.player.hp + heal, 0, game.player.max_hp)
+                return [f"You drink the {potion} and recover {game.player.hp - old} HP."]
+
+            if potion == "potion of heroism":
+                game.player.inspired_die = max(game.player.inspired_die, 8)
+                return ["You drink the potion of heroism. Your courage sharpens.", "(+1d8 to your next attack roll)"]
+
+            if potion == "potion of invisibility":
+                if room.monster is None or room.monster.hp <= 0:
+                    return ["You drink it. For a moment, your hands fade—then return. (No immediate threat.)"]
+                room.combat_state["player_hidden"] = "yes"
+                room.combat_state["escape_ok"] = "yes"
+                return ["You drink the potion and vanish from your foe's sight.", "Your next attack has advantage, and you can escape once. (Try `go <direction>`.)"]
+
+            return ["You drink it, but nothing obvious happens."]
 
         # Key use for locked door
         if "key" in arg:
@@ -2241,16 +2768,202 @@ class GameEngine:
 
         # Utility items
         if "holy water" in arg:
-            if not any("holy water" in it.lower() for it in game.player.inventory):
+            idx = next((i for i, it in enumerate(game.player.inventory) if "holy water" in it.lower()), None)
+            if idx is None:
                 return ["You don't have holy water."]
+
+            # Objective: cleanse a shrine.
+            if "defiled altar" in room.scenery and str((game.objective or {}).get("type")) == "cleanse_shrine":
+                if room.room_state.get("altar_cleansed") == "yes":
+                    return ["The altar is already cleansed."]
+                if room.monster is not None and room.monster.hp > 0:
+                    return ["Not while something hostile watches your every move."]
+                game.player.inventory.pop(idx)
+                room.room_state["altar_cleansed"] = "yes"
+                game.objective["cleansed"] = "yes"
+                return ["You sprinkle holy water over the altar.", "The foulness recoils and breaks like a wave on stone.", "Objective complete."]
+
             if room.monster is None or room.monster.hp <= 0:
                 return ["You sprinkle holy water. Nothing happens."]
+            game.player.inventory.pop(idx)
             dmg = _roll(rng, 2, 6)
             room.monster.hp = max(0, room.monster.hp - dmg)
             lines = [f"Holy water sizzles on {room.monster.name}! It takes {dmg} radiant damage."]
             if room.monster.hp <= 0:
                 lines.append(self._on_monster_defeated(game, rng, room))
             return lines
+
+        if "antitoxin" in arg:
+            idx = next((i for i, it in enumerate(game.player.inventory) if "antitoxin" in it.lower()), None)
+            if idx is None:
+                return ["You don't have antitoxin."]
+            game.player.inventory.pop(idx)
+            old = game.player.hp
+            game.player.hp = _clamp(game.player.hp + (_roll(rng, 1, 4) + 1), 0, game.player.max_hp)
+            return [f"You swallow the antitoxin. (+{game.player.hp - old} HP)"]
+
+        # Rune dial puzzle interaction.
+        if room.puzzle == "rune_dial" and room.puzzle_state.get("solved") != "yes":
+            if arg.startswith("dial"):
+                parts = arg.split(maxsplit=1)
+                if len(parts) < 2:
+                    return ["Set the dial to what word? (Example: `use dial shadow`)"]
+                word = parts[1].strip().lower()
+                expected = str(room.puzzle_state.get("answer") or "").lower()
+                if word == expected:
+                    room.puzzle_state["solved"] = "yes"
+                    reward = str(room.puzzle_state.get("reward") or "trinket")
+                    room.items.append(reward)
+                    return ["The dial turns with a grinding sigh.", "The runes flare once, then fade.", f"A compartment opens, revealing {reward}."]
+                return ["The dial shudders, then snaps back. Wrong."]
+
+        # Trapped chest puzzle interaction.
+        if room.puzzle == "trapped_chest" and room.puzzle_state.get("solved") != "yes":
+            if "chest" in arg:
+                if room.monster is not None and room.monster.hp > 0:
+                    return ["Not while an enemy threatens you."]
+                dc = int(room.puzzle_state.get("dc") or 12)
+                if room.puzzle_state.get("disarmed") != "yes":
+                    roll, total, ok = self._ability_check(rng, game.player, "dex", dc)
+                    if ok:
+                        room.puzzle_state["disarmed"] = "yes"
+                        return [f"You find the mechanism (DEX check {roll} -> {total}) and disable it.", "Now you can open the chest safely. (Try `use chest` again.)"]
+                    dmg = _roll(rng, 1, 6) + 1
+                    game.player.hp = max(0, game.player.hp - dmg)
+                    if game.player.hp <= 0:
+                        game.lost = True
+                        return [f"A spring snaps. A needle strikes—{dmg} damage.", "You collapse. Darkness takes you. (Refresh to start a new adventure.)"]
+                    return [f"You trigger the trap (DEX check {roll} -> {total}). A needle strikes—{dmg} damage."]
+
+                reward = str(room.puzzle_state.get("reward") or "coin pouch")
+                room.puzzle_state["solved"] = "yes"
+                room.items.append(reward)
+                return ["You open the chest.", f"Inside, you find {reward}."]
+
+        # Objective interactables
+        if arg in ("brazier", "light brazier") and "brazier" in room.scenery:
+            if room.monster is not None and room.monster.hp > 0:
+                return ["Not while something hostile prowls nearby."]
+            if room.room_state.get("brazier_lit") == "yes":
+                return ["The brazier is already burning."]
+            room.room_state["brazier_lit"] = "yes"
+            if str((game.objective or {}).get("type")) == "light_beacons":
+                game.objective["lit"] = int((game.objective or {}).get("lit") or 0) + 1
+                cur = int((game.objective or {}).get("lit") or 0)
+                need = int((game.objective or {}).get("count") or 3)
+                return ["You coax a flame from the old coals. The brazier catches.", f"Objective: {cur}/{need} braziers lit."]
+            return ["You light the brazier. The flame throws long shadows."]
+
+        if "cage" in arg and "cage" in room.scenery:
+            if room.monster is not None and room.monster.hp > 0:
+                return ["Not while an enemy threatens you."]
+            if room.room_state.get("cage_open") == "yes":
+                return ["The cage is already open."]
+            needed = str((game.objective or {}).get("key") or "").lower()
+            if needed and any(needed == it.lower() for it in game.player.inventory):
+                room.room_state["cage_open"] = "yes"
+                if str((game.objective or {}).get("type")) == "rescue_prisoner":
+                    game.objective["rescued"] = "yes"
+                return [f"You unlock the cage with the {needed}.", "The captive steps out, trembling but alive.", "Objective complete."]
+            if any("lockpick" in it.lower() for it in game.player.inventory):
+                roll, total, ok = self._ability_check(rng, game.player, "dex", 13)
+                if ok:
+                    room.room_state["cage_open"] = "yes"
+                    if str((game.objective or {}).get("type")) == "rescue_prisoner":
+                        game.objective["rescued"] = "yes"
+                    return [f"You pick the cage lock (DEX check {roll} -> {total}).", "The captive stumbles free.", "Objective complete."]
+                return [f"You can't get the lock to give (DEX check {roll} -> {total})."]
+            if needed:
+                return [f"The cage is locked. You'll need the {needed} (or lockpicks)."]
+            return ["The cage is locked tight."]
+
+        if ("altar" in arg) and ("defiled altar" in room.scenery):
+            if str((game.objective or {}).get("type")) != "cleanse_shrine":
+                return ["You steady your breath at the altar, but your current task lies elsewhere."]
+            if room.room_state.get("altar_cleansed") == "yes":
+                return ["The altar is already cleansed."]
+            if not any("holy water" in it.lower() for it in game.player.inventory):
+                return ["You need holy water to cleanse it."]
+            return ["To cleanse the altar, try `use holy water`."]
+
+        if arg in ("rift", "portal") and "rift" in room.scenery:
+            if str((game.objective or {}).get("type")) != "seal_portal":
+                return ["You stare into the rift and feel it stare back. This isn't your task—yet."]
+            if room.room_state.get("rift_sealed") == "yes":
+                return ["The rift is already sealed."]
+            if room.monster is not None and room.monster.hp > 0:
+                return ["Not while an enemy threatens you."]
+            comps = [str(c).lower() for c in (game.objective or {}).get("components") or []]
+            inv = [it.lower() for it in game.player.inventory]
+            missing = [c for c in comps if c not in inv]
+            if missing:
+                return ["You lack the components to seal it.", "Missing: " + ", ".join(missing) + "."]
+            # consume components
+            for c in comps:
+                idx = next((i for i, it in enumerate(game.player.inventory) if it.lower() == c), None)
+                if idx is not None:
+                    game.player.inventory.pop(idx)
+            room.room_state["rift_sealed"] = "yes"
+            game.objective["sealed"] = "yes"
+            return ["You draw a warding circle and cast silver dust into the wound.", "The rift shrinks, then snaps shut like a held breath released.", "Objective complete."]
+
+        if "phylactery" in arg:
+            name = str((game.objective or {}).get("phylactery") or "black phylactery").lower()
+            if any(name == it.lower() for it in game.player.inventory) and str((game.objective or {}).get("type")) == "destroy_phylactery":
+                if str((game.objective or {}).get("destroyed") or "no") == "yes":
+                    return ["It's already destroyed."]
+                if room.monster is not None and room.monster.hp > 0:
+                    return ["Not while an enemy threatens you."]
+                roll, total, ok = self._ability_check(rng, game.player, "wis", 12)
+                # remove from inventory
+                idx = next((i for i, it in enumerate(game.player.inventory) if it.lower() == name), None)
+                if idx is not None:
+                    game.player.inventory.pop(idx)
+                if not ok:
+                    dmg = _roll(rng, 1, 6)
+                    game.player.hp = max(0, game.player.hp - dmg)
+                    if game.player.hp <= 0:
+                        game.lost = True
+                        return [f"You crack it open, and the backlash hits you—{dmg} damage.", "You collapse. Darkness takes you. (Refresh to start a new adventure.)"]
+                    game.objective["destroyed"] = "yes"
+                    return [f"You smash the phylactery (WIS check {roll} -> {total}).", f"A cold scream rips through you for {dmg} damage—then fades.", "Objective complete."]
+                game.objective["destroyed"] = "yes"
+                return [f"You smash the phylactery (WIS check {roll} -> {total}).", "Whatever held it together unravels into harmless ash.", "Objective complete."]
+
+        # Ambient interactions
+        if ("statue" in arg) and ("statue" in room.scenery):
+            if room.monster is not None and room.monster.hp > 0:
+                return ["Not while an enemy threatens you."]
+            if room.room_state.get("statue_touched") == "yes":
+                return ["You've already searched the statue." ]
+            room.room_state["statue_touched"] = "yes"
+            roll, total, ok = self._ability_check(rng, game.player, "wis", 12)
+            if ok:
+                game.player.inspired_die = max(game.player.inspired_die, 6)
+                return [f"You place a hand on the stone (WIS check {roll} -> {total}).", "For a moment, your doubts quiet. (+1d6 to your next attack roll)"]
+            # small consolation loot
+            if rng.random() < 0.50:
+                room.items.append("coin pouch")
+                return [f"You search the statue (WIS check {roll} -> {total}).", "Your fingers find a hidden niche with a coin pouch."]
+            return [f"You search the statue (WIS check {roll} -> {total}), but find only cold stone."]
+
+        if ("fountain" in arg) and ("fountain" in room.scenery):
+            if room.monster is not None and room.monster.hp > 0:
+                return ["Not while an enemy threatens you."]
+            if room.room_state.get("fountain_used") == "yes":
+                return ["The fountain offers nothing more."]
+            room.room_state["fountain_used"] = "yes"
+            roll, total, ok = self._ability_check(rng, game.player, "con", 11)
+            if ok:
+                old = game.player.hp
+                game.player.hp = _clamp(game.player.hp + (_roll(rng, 1, 6) + 2), 0, game.player.max_hp)
+                return [f"You drink a few cold drops (CON check {roll} -> {total}). (+{game.player.hp - old} HP)"]
+            dmg = _roll(rng, 1, 4)
+            game.player.hp = max(0, game.player.hp - dmg)
+            if game.player.hp <= 0:
+                game.lost = True
+                return [f"The water burns like frost (CON check {roll} -> {total}). {dmg} damage.", "You collapse. Darkness takes you. (Refresh to start a new adventure.)"]
+            return [f"The water burns like frost (CON check {roll} -> {total}). You take {dmg} damage."]
 
         return ["You can't figure out how to use that here."]
 
@@ -2316,6 +3029,10 @@ class GameEngine:
                 monster_adv = True
                 game.player.reckless_next = False
 
+            if room.combat_state.get("player_hidden") == "yes":
+                advantage = True
+                room.combat_state["player_hidden"] = "no"
+
             roll1 = rng.randint(1, 20)
             roll2 = rng.randint(1, 20) if advantage else None
             d20 = max(roll1, roll2) if roll2 is not None else roll1
@@ -2356,6 +3073,10 @@ class GameEngine:
                     extra_dice = game.player.rogue_sneak_dice * (2 if crit else 1)
                     dmg += _roll(rng, extra_dice, 6)
                     room.combat_state["sneak_used"] = "yes"
+
+                # Warlock Hex: +1d6 necrotic per hit (doubled on crit)
+                if game.player.char_class == "Warlock" and room.combat_state.get("hex") == "yes":
+                    dmg += _roll(rng, 2 if crit else 1, 6)
 
                 dmg = max(0, dmg)
                 room.monster.hp = max(0, room.monster.hp - dmg)
@@ -2433,20 +3154,51 @@ class GameEngine:
             room.items.append("holy water")
         return "\n".join(lines)
 
+    def _apply_chapter_transition(self, game: Game, rng: random.Random) -> List[str]:
+        p = game.player
+        lines: List[str] = []
+
+        target_level = _clamp(int(game.chapter), 1, 20)
+        if p.level < target_level:
+            # Guarantee one-at-a-time progression through levels 1..20 (chapter == level).
+            p.xp = max(p.xp, self._xp_for_level(target_level))
+            gained_hp_total = 0
+            while p.level < target_level:
+                hp_gain, asi_note = self._level_up_once(p, rng)
+                gained_hp_total += hp_gain
+                if asi_note:
+                    lines.append(asi_note)
+            lines.append(f"You advance to level {p.level}. (+{gained_hp_total} max HP)")
+
+        # Between chapters, you get a full reset (a long rest in spirit).
+        p.hp = p.max_hp
+        if p.max_spell_slots:
+            p.spell_slots = p.max_spell_slots
+        if p.char_class == "Barbarian":
+            p.rages = p.max_rages
+            p.is_raging = False
+            p.reckless_next = False
+        if p.char_class == "Bard":
+            p.bardic_inspiration = p.max_bardic_inspiration
+            p.inspired_die = 0
+
+        return lines
+
     def _cmd_continue(self, game: Game, rng: random.Random) -> List[str]:
+        if int(game.chapter) >= MAX_CHAPTERS:
+            game.campaign_complete = True
+            return ["You've already conquered the deepest chapter. Your story is complete."]
+
         prev_type = str((game.objective or {}).get("type") or "")
         game.chapter = int(game.chapter) + 1
 
-        dungeon_size = rng.randint(8, 12) + min(10, (game.chapter - 1) * 2)
-        rooms, start_id, boss_id = self._generate_dungeon(rng, dungeon_size)
+        transition_lines = self._apply_chapter_transition(game, rng)
+
+        dungeon_size = self._chapter_dungeon_size(rng, chapter=int(game.chapter))
+        rooms, start_id, boss_id = self._generate_dungeon(rng, dungeon_size, chapter=int(game.chapter))
 
         objective = self._roll_objective(rng, chapter=game.chapter, previous_type=prev_type)
-        artifact = str(objective.get("artifact") or "")
-        if objective.get("type") == "recover_artifact" and artifact:
-            rooms[boss_id].items.append(artifact)
-        if objective.get("type") == "collect_sigils":
-            sigils = list(objective.get("sigils") or [])
-            self._place_objective_items(rng, rooms, start_id=start_id, boss_id=boss_id, items=sigils)
+        artifact = self._apply_objective_setup(rng, rooms, start_id=start_id, boss_id=boss_id, objective=objective)
 
         game.rooms = rooms
         game.current_room_id = start_id
@@ -2454,16 +3206,25 @@ class GameEngine:
         game.objective = objective
         game.artifact_item = artifact
         game.won = False
+        game.visited_rooms.clear()
+        game.visited_rooms.add(start_id)
 
         patron = game.story.get("patron", "your patron")
         place = game.story.get("place", "your home")
-        return [
+        lines = [
             f"Chapter {game.chapter}: a new descent.",
             f"Back in {place}, {patron} sends word:",
             self._objective_brief(game),
+        ]
+        if transition_lines:
+            lines.append("")
+            lines.extend(transition_lines)
+        lines.extend([
+            "",
             "You steel yourself and head down again…",
             self._describe_room(game),
-        ]
+        ])
+        return lines
 
     def _cmd_rage(self, game: Game) -> List[str]:
         p = game.player
@@ -2498,6 +3259,48 @@ class GameEngine:
             f"Bardic Inspiration: {p.bardic_inspiration}/{p.max_bardic_inspiration}",
         ]
 
+    def _cmd_hide(self, game: Game, rng: random.Random) -> List[str]:
+        p = game.player
+        room = game.rooms[game.current_room_id]
+        if p.char_class != "Rogue":
+            return ["You don't have the instincts for that kind of vanishing act."]
+        if room.monster is None or room.monster.hp <= 0:
+            return ["You melt into the shadows for practice. (There's no immediate threat.)"]
+        if room.combat_state.get("hide_used") == "yes":
+            return ["You've already tried to hide in this fight."]
+
+        # Simple stealth check. This is a text-adventure abstraction, not full 5e rules.
+        roll, total, ok = self._ability_check(rng, p, "dex", 12)
+        room.combat_state["hide_used"] = "yes"
+        if not ok:
+            return [f"You try to vanish (DEX check {roll} -> {total}), but your movement gives you away."]
+
+        room.combat_state["player_hidden"] = "yes"
+        return [
+            f"You slip out of sight (DEX check {roll} -> {total}).",
+            "Your next attack will have advantage.",
+        ]
+
+    def _cmd_hex(self, game: Game, rng: random.Random) -> List[str]:
+        p = game.player
+        room = game.rooms[game.current_room_id]
+        if p.char_class != "Warlock":
+            return ["You speak the word, but no pact answers."]
+        if room.monster is None or room.monster.hp <= 0:
+            return ["There's nothing here to curse."]
+        if room.combat_state.get("hex") == "yes":
+            return ["Your hex is already clinging to your foe."]
+        if p.spell_slots <= 0:
+            return ["You're out of spell slots."]
+
+        p.spell_slots -= 1
+        room.combat_state["hex"] = "yes"
+        room.combat_state["hex_target"] = room.monster.name
+        return [
+            f"You whisper a cruel syllable and lay a hex upon {room.monster.name}.",
+            "Your hits against it deal +1d6 necrotic damage (this fight).",
+        ]
+
     def _cmd_rest(self, game: Game, rng: random.Random) -> List[str]:
         room = game.rooms[game.current_room_id]
         if room.monster is not None and room.monster.hp > 0:
@@ -2528,13 +3331,32 @@ class GameEngine:
         if not self._objective_completed(game):
             return "You can't leave yet. Your objective is still unfinished."
         game.won = True
+        if int(game.chapter) >= MAX_CHAPTERS:
+            game.campaign_complete = True
+            return "You climb into daylight after the final descent. You've won the campaign."
         t = str((game.objective or {}).get("type") or "recover_artifact")
+        header = f"Chapter {game.chapter} complete."
         if t == "slay_boss":
-            return "With the dungeon's master slain, you climb to the surface. You've won! (Type `continue` to keep going.)"
-        if t == "collect_sigils":
-            return "The sigils hum in your pack as you climb into daylight. You've won! (Type `continue` to keep going.)"
-        art = str((game.objective or {}).get("artifact") or game.artifact_item or "artifact")
-        return f"You ascend to the surface with the {art}. You've won! (Type `continue` to keep going.)"
+            body = "With the dungeon's master slain, you climb to the surface." 
+        elif t == "collect_sigils":
+            body = "The sigils hum in your pack as you climb into daylight." 
+        elif t == "light_beacons":
+            body = "Behind you, three ancient flames burn again—small lights pushing back a very old dark." 
+        elif t == "rescue_prisoner":
+            who = str((game.objective or {}).get("prisoner") or "the prisoner")
+            body = f"You lead {who} up into clean air." 
+        elif t == "cleanse_shrine":
+            body = "You leave the altar cleansed, and the dungeon feels a fraction less hungry." 
+        elif t == "seal_portal":
+            body = "The rift is sealed. The cold wind is gone." 
+        elif t == "destroy_phylactery":
+            body = "The phylactery is broken. Whatever it bound can no longer cling so easily to this world." 
+        else:
+            art = str((game.objective or {}).get("artifact") or game.artifact_item or "artifact")
+            body = f"You ascend to the surface with the {art}." 
+
+        footer = "You can stop here for a complete chapter, or type `continue` to descend again."
+        return "\n".join([header, body + " You've won!", footer])
 
     def _log(self, game: Game, text: str) -> None:
         game.log.append(text)
