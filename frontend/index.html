@@ -1,60 +1,67 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Text Adventure</title>
-    <link rel="icon" href="/assets/Logo_Square-ICO_TransparentBG.ico" sizes="any" />
-    <link rel="stylesheet" href="/static/styles.css" />
-  </head>
-  <body>
-    <main class="app">
-      <header class="header">
-        <div class="title-row">
-          <img class="title-logo" src="/assets/Logo_Square_TransparentBG.png" alt="Text Adventure logo" />
-          <h1>Text Adventure</h1>
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- IMPORTANT: makes relative URLs resolve under /easter-egg/ -->
+  <base href="/easter-egg/" />
+
+  <title>Text Adventure</title>
+
+  <link rel="icon" href="assets/Logo_Square-ICO_TransparentBG.ico" sizes="any" />
+  <link rel="stylesheet" href="static/styles.css" />
+</head>
+
+<body>
+  <main class="app">
+    <header class="header">
+      <div class="title-row">
+        <img class="title-logo" src="assets/Logo_Square_TransparentBG.png" alt="Text Adventure logo" />
+        <h1>Text Adventure</h1>
+      </div>
+      <div class="sub">Procedural, DnD-inspired one-sitting adventure</div>
+    </header>
+
+    <section class="main-row" aria-label="Game view">
+      <section class="panel" aria-label="Character sheet">
+        <div class="panel-head">
+          <div class="panel-title">Character</div>
         </div>
-        <div class="sub">Procedural, DnD-inspired one-sitting adventure</div>
-      </header>
+        <pre id="sheet" class="sheet" aria-label="Character sheet"></pre>
+      </section>
 
-      <section class="main-row" aria-label="Game view">
-        <section class="panel" aria-label="Character sheet">
-          <div class="panel-head">
-            <div class="panel-title">Character</div>
+      <section class="panel" aria-label="Game output">
+        <div class="panel-head">
+          <div class="panel-title">Adventure</div>
+        </div>
+        <pre id="log" class="log" aria-live="polite"></pre>
+      </section>
+
+      <section class="map-col" aria-label="Maps">
+        <section class="panel" aria-label="Dungeon map">
+          <div class="panel-head compact">
+            <div class="panel-title">Dungeon Map</div>
           </div>
-          <pre id="sheet" class="sheet" aria-label="Character sheet"></pre>
-        </section>
-
-        <section class="panel" aria-label="Game output">
-          <div class="panel-head">
-            <div class="panel-title">Adventure</div>
-          </div>
-          <pre id="log" class="log" aria-live="polite"></pre>
-        </section>
-
-        <section class="map-col" aria-label="Maps">
-          <section class="panel" aria-label="Dungeon map">
-            <div class="panel-head compact">
-              <div class="panel-title">Dungeon Map</div>
-            </div>
-            <div class="map-body" aria-label="Dungeon map body">
-              <pre id="dungeonMap" class="map map-art" aria-label="Dungeon map"></pre>
-              <pre id="dungeonLegend" class="map-legend" aria-label="Dungeon map legend">P = you
+          <div class="map-body" aria-label="Dungeon map body">
+            <pre id="dungeonMap" class="map map-art" aria-label="Dungeon map"></pre>
+            <pre id="dungeonLegend" class="map-legend" aria-label="Dungeon map legend">P = you
 M = enemy
 E = exit
 B = boss
 * = loot
 ? = puzzle</pre>
-            </div>
-          </section>
+          </div>
+        </section>
 
-          <section class="panel" aria-label="Room map">
-            <div class="panel-head compact">
-              <div class="panel-title">Room</div>
-            </div>
-            <div class="map-body" aria-label="Room map body">
-              <pre id="roomMap" class="map map-art" aria-label="Room map"></pre>
-              <pre id="roomLegend" class="map-legend" aria-label="Room map legend">@ = you
+        <section class="panel" aria-label="Room map">
+          <div class="panel-head compact">
+            <div class="panel-title">Room</div>
+          </div>
+          <div class="map-body" aria-label="Room map body">
+            <pre id="roomMap" class="map map-art" aria-label="Room map"></pre>
+            <pre id="roomLegend" class="map-legend" aria-label="Room map legend">@ = you
 m = enemy
 * = items
 ? = puzzle
@@ -71,27 +78,30 @@ T = firepit
 C = camp
 
 + - | = walls</pre>
-            </div>
-          </section>
+          </div>
         </section>
       </section>
+    </section>
 
-      <section class="controls" aria-label="Command input">
-        <form id="cmdForm" class="cmd-form" autocomplete="off">
-          <input id="cmdInput" class="cmd-input" type="text" placeholder="Type a command (help, look, go north, take, attack, use potion, leave)" />
-          <button id="cmdSubmit" class="cmd-submit" type="submit">Send</button>
-          <button id="newGame" class="cmd-secondary" type="button">New Game</button>
-        </form>
-        <div class="hint">
-          Try: <code>help</code>, <code>look</code>, <code>look door</code>, <code>go east</code>, <code>equip shortsword</code>, <code>attack</code>, <code>cast healing word</code>
-        </div>
-      </section>
+    <section class="controls" aria-label="Command input">
+      <form id="cmdForm" class="cmd-form" autocomplete="off">
+        <input id="cmdInput" class="cmd-input" type="text"
+          placeholder="Type a command (help, look, go north, take, attack, use potion, leave)" />
+        <button id="cmdSubmit" class="cmd-submit" type="submit">Send</button>
+        <button id="newGame" class="cmd-secondary" type="button">New Game</button>
+      </form>
+      <div class="hint">
+        Try: <code>help</code>, <code>look</code>, <code>look door</code>, <code>go east</code>,
+        <code>equip shortsword</code>, <code>attack</code>, <code>cast healing word</code>
+      </div>
+    </section>
 
-      <footer class="footer">
-        No save files. Refreshing or starting a new game generates a new dungeon.
-      </footer>
-    </main>
+    <footer class="footer">
+      No save files. Refreshing or starting a new game generates a new dungeon.
+    </footer>
+  </main>
 
-    <script src="/static/app.js"></script>
-  </body>
+  <script src="/easter-egg/static/app.js"></script>
+</body>
+
 </html>

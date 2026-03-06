@@ -103,7 +103,7 @@ async function newGame() {
   setText(elDungeonMap, '');
   setText(elRoomMap, '');
   appendToLog('Generating a new adventure...');
-  const data = await postJson('/api/new_game');
+  const data = await postJson('api/new_game');
   gameId = data.state.gameId;
   clearLog();
   appendToLog(data.text);
@@ -115,7 +115,7 @@ async function sendCommand(cmd) {
     await newGame();
   }
   appendToLog('> ' + cmd);
-  const data = await postJson('/api/command', { gameId, command: cmd });
+  const data = await postJson('api/command', { gameId, command: cmd });
   appendToLog(data.text);
   renderFromState(data.state);
 }
