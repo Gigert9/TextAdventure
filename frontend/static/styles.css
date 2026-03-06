@@ -32,22 +32,32 @@ body {
   min-height: 100vh;
 }
 
+.header {
+  padding-top: 10px;
+}
+
 .header h1 {
   margin: 0;
   font-size: clamp(18px, 2.1vh, 20px);
   letter-spacing: 0.5px;
+  transform: scale(var(--brand-title-scale, 1.65));
+  transform-origin: left bottom;
 }
 
 .title-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  --brand-title-scale: 1.65;
+  --brand-logo-scale: 2.15;
+  gap: 24px;
 }
 
 .title-logo {
   height: clamp(18px, 2.1vh, 20px);
   width: auto;
   display: block;
+  transform: scale(var(--brand-logo-scale, 1.95));
+  transform-origin: left bottom;
 }
 
 .sub {
